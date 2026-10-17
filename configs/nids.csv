@@ -67,6 +67,7 @@ sceAtrac3plus,0x7A20E7AF,sceAtracSetDataAndGetID
 sceAtrac3plus,0x868120B5,sceAtracSetLoopNum
 sceAtrac3plus,0x9AE849A7,sceAtracGetRemainFrame
 sceAtrac3plus,0xA2BBA8BE,sceAtracGetSoundSample
+sceAtrac3plus,0xD6A5F2F7,sceAtracGetMaxSample
 sceAtrac3plus,0xA554A158,sceAtracGetBitrate
 sceAtrac3plus,0xE23E3A35,sceAtracGetNextDecodePosition
 sceAtrac3plus,0xFAA4F89B,sceAtracGetLoopStatus
@@ -107,6 +108,7 @@ sceDisplay,0xEEDA2E54,sceDisplayGetFrameBuf
 sceDisplay,0xDBA6C4C4,sceDisplayGetFramePerSec
 sceDisplay,0x773DD3A3,sceDisplayGetCurrentHcount
 sceDisplay,0x4D4E10EC,sceDisplayIsVblank
+sceDisplay,0x210EAB3A,sceDisplayGetAccumulatedHcount
 sceDmac,0x617F3FE6,sceDmacMemcpy
 sceGe_user,0x03444EB4,sceGeListSync
 sceGe_user,0x05DB22CE,sceGeUnsetCallback

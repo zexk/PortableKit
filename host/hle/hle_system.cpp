@@ -43,11 +43,13 @@ bool trace_system_params() {
 }
 
 void register_utils(HleRegistrar &hle) {
-    // The host has no data cache to keep coherent. Phantasy Star Portable 2
+    // The host has no data cache to keep coherent, and no debug switches
+    // (GPI reads 0). Phantasy Star Portable 2
     // Infinity (NPJH50332) uses WritebackInvalidateRange.
     for (const char *name : {"sceKernelDcacheWritebackAll", "sceKernelDcacheWritebackInvalidateAll",
                              "sceKernelDcacheInvalidateRange", "sceKernelDcacheWritebackRange",
-                             "sceKernelDcacheWritebackInvalidateRange", "sceKernelSetGPO"})
+                             "sceKernelDcacheWritebackInvalidateRange", "sceKernelSetGPO",
+                             "sceKernelGetGPI"})
         hle.add("UtilsForUser", name, success);
     // The guest flushes the instruction cache after copying code into an overlay
     // slot, which is the profile's cue to re-check which overlay is loaded.

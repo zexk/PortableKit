@@ -696,6 +696,11 @@ void register_vblank_waits(HleRegistrar &hle) {
         const std::uint64_t since = kernel().now_us() - kernel().last_vblank_us();
         kernel().finish(ctx, static_cast<std::uint32_t>(since * 286u / 16683u % 286u));
     });
+    // Lines since boot at 286 lines per 16683 us frame. Metal Gear Solid
+    // Portable Ops reads it at start-up.
+    hle.add("sceDisplay", "sceDisplayGetAccumulatedHcount", [](Runtime &, AllegrexContext &ctx) {
+        kernel().finish(ctx, static_cast<std::uint32_t>(kernel().now_us() * 286u / 16683u));
+    });
     hle.add("sceDisplay", "sceDisplayIsVblank", [](Runtime &, AllegrexContext &ctx) {
         log_once("display-isvblank", "[display] sceDisplayIsVblank (UNVERIFIED: no game traced yet)");
         const std::uint64_t since = kernel().now_us() - kernel().last_vblank_us();

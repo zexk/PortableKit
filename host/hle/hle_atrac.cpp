@@ -673,6 +673,21 @@ void register_atrac_functions(HleRegistrar &hle) {
         finish_traced(ctx, "sceAtracGetSoundSample", 0u);
     });
 
+    // sceAtracGetMaxSample(id, outMaxSamples): samples one decode call can
+    // return, the codec's frame size. Metal Gear Solid Portable Ops sizes its
+    // voice buffers with it.
+    hle.add("sceAtrac3plus", "sceAtracGetMaxSample", [](Runtime &rt, AllegrexContext &ctx) {
+        const std::uint32_t id = arg(ctx, 0);
+        const AtracContext *context = find_context(id);
+        if (context == nullptr) {
+            finish_traced(ctx, "sceAtracGetMaxSample", context_error(id));
+            return;
+        }
+        const auto samples = static_cast<std::uint32_t>(audio::atrac_frame_samples(context->track.codec));
+        rt.memory().store32(arg(ctx, 1), samples);
+        finish_traced(ctx, "sceAtracGetMaxSample", 0u, "samples=" + std::to_string(samples));
+    });
+
     // sceAtracGetBitrate(id, outKbps)
     hle.add("sceAtrac3plus", "sceAtracGetBitrate", [](Runtime &rt, AllegrexContext &ctx) {
         const std::uint32_t id = arg(ctx, 0);
