@@ -7,6 +7,7 @@
 #include "psprecomp/common.hpp"
 #include "psprecomp/elf32.hpp"
 
+#include <algorithm>
 #include <filesystem>
 #include <fstream>
 #include <iomanip>
@@ -92,6 +93,11 @@ std::optional<std::uint32_t> load_user_module(Runtime &runtime, std::span<const 
     // failure for any the HLE and the loaded modules do not provide.
     std::size_t missing = 0u;
     module.imports = elf.scan_imports(runtime.memory(), *info);
+    // The code a corpus is built from ends where the import stubs begin:
+    // compiled, a stub is two plain instructions, and a call to it from the
+    // same unit would skip the HLE.
+    for (const auto &import : module.imports)
+        module.code_size = std::min(module.code_size, import.stub_address - base);
     for (const auto &import : module.imports) {
         if (!runtime.has_hle(import.library, import.nid)) {
             ++missing;
@@ -129,12 +135,6 @@ bool user_module_code_miss(Runtime &runtime, std::uint32_t pc) {
         const std::uint64_t hash = module_code_hash(code);
         module.code_hash = hash;
         if (install_module_corpus(runtime, module.base, code)) {
-            // The corpus compiled the import stubs as plain code; bind them
-            // to the HLE again.
-            for (const auto &import : module.imports) {
-                runtime.unregister_functions(import.stub_address, import.stub_address + 8u);
-                (void)runtime.register_import_stub(import.stub_address, import.library, import.nid);
-            }
             std::cout << "[module] " << module.name << " at " << psprecomp::hex32(module.base) << ": recompiled code (first run at " << psprecomp::hex32(pc) << ")\n";
             return true;
         }
