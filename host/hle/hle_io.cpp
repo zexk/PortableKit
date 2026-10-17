@@ -500,14 +500,18 @@ void complete_async(OpenFile &file, std::int64_t result) {
 }
 
 // The handle an asynchronous call names, if it can start one: it exists and
-// has no result waiting to be collected.
+// is not being released. Busy means an operation still in flight, and ours
+// complete at once, so an uncollected result does not block the next call:
+// it is replaced, as PPSSPP does. Metal Gear Solid Portable Ops' file system
+// module issues its next sceIoReadAsync before its reader thread collects the
+// last one, and retries a busy read forever.
 OpenFile *async_handle(std::uint32_t fd, std::uint32_t &error) {
     const auto found = io().files.find(fd);
     if (found == io().files.end()) {
         error = io_error::kBadFileDescriptor;
         return nullptr;
     }
-    if (found->second.async_result || found->second.release_after_async) {
+    if (found->second.release_after_async) {
         error = async_error::kBusy;
         return nullptr;
     }

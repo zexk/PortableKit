@@ -384,7 +384,11 @@ int main(int argc, char **argv) {
         psprecomp::Runtime runtime(ram_bytes);
         for (const EmbeddedNid &entry : kEmbeddedNids) runtime.nids().add(entry.library, entry.nid, entry.name);
         (void)elf.load_and_relocate(runtime.memory(), load_base);
-        if (known_executable && variant == nullptr) {
+        // PSPRECOMP_NO_AOT runs everything under the interpreter, to tell a
+        // recompiler fault from a system-layer one.
+        if (std::getenv("PSPRECOMP_NO_AOT") != nullptr) {
+            std::cout << "PSPRECOMP_NO_AOT: recompiled code not registered; it runs under the interpreter.\n";
+        } else if (known_executable && variant == nullptr) {
             psprecomp::register_generated_functions(runtime);
         } else if (variant != nullptr) {
             // An edition's corpus is a library of its own (generated-variants/<key>/).
