@@ -521,6 +521,11 @@ void Runtime::register_hle(std::string library, std::uint32_t nid, HleFunction f
     hle_[std::move(library)][nid] = std::move(function);
 }
 
+bool Runtime::has_hle(std::string_view library, std::uint32_t nid) const {
+    const auto found = hle_.find(library);
+    return found != hle_.end() && found->second.count(nid) != 0u;
+}
+
 namespace {
 
 struct ImportStub {

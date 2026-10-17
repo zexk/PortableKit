@@ -59,6 +59,7 @@ set(PORTABLEKIT_HOST_SOURCES
     host/hle/hle_sysmem.cpp
     host/hle/hle_io.cpp
     host/hle/hle_system.cpp
+    host/hle/user_modules.cpp
     host/hle/hle_media.cpp
     host/hle/hle_atrac.cpp
     host/hle/hle_mpeg.cpp

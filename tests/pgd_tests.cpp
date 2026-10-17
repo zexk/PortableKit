@@ -6,6 +6,7 @@
 
 #include "crypto/pgd.hpp"
 
+#include <algorithm>
 #include <cstdio>
 #include <map>
 #include <string>

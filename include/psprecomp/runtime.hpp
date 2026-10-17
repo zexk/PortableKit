@@ -65,6 +65,7 @@ public:
 
     void register_function(std::uint32_t address, RecompiledFunction function, std::string name);
     void register_hle(std::string library, std::uint32_t nid, HleFunction function);
+    [[nodiscard]] bool has_hle(std::string_view library, std::uint32_t nid) const;
     // Binds a PSP import stub's address, so a jump to it calls the HLE and
     // returns. Recompiled code never jumps to a stub -- the recompiler turns
     // each call into a direct HLE call and registers its own wrapper there --

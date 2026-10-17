@@ -6,6 +6,7 @@
 
 #include "kernel/rtc_time.hpp"
 #include "overlays.hpp"
+#include "user_modules.hpp"
 
 #include "psprecomp/common.hpp"
 
@@ -16,6 +17,7 @@
 #include <iostream>
 #include <set>
 #include <string>
+#include <vector>
 
 namespace portablekit {
 void register_rtc_calendar(HleRegistrar &hle);
@@ -113,10 +115,21 @@ void register_process(HleRegistrar &hle) {
         log_once("module:" + name, "[module] loaded stock module " + name + where + " (HLE)");
         kernel().finish(ctx, uid);
     };
-    hle.add("ModuleMgrForUser", "sceKernelLoadModuleByID", [load_stock_module](Runtime &, AllegrexContext &ctx) {
-        std::array<std::uint8_t, 0x100> header{};
-        const std::size_t count = read_open_file(arg(ctx, 0), 0u, header.data(), header.size());
-        load_stock_module(ctx, header.data(), count, "");
+    // A plain PRX is one of the game's own modules and is really loaded
+    // (user_modules.hpp); anything else is a stock module.
+    hle.add("ModuleMgrForUser", "sceKernelLoadModuleByID", [load_stock_module](Runtime &rt, AllegrexContext &ctx) {
+        std::vector<std::uint8_t> bytes;
+        for (std::size_t got = 1u; got != 0u;) {
+            const std::size_t at = bytes.size();
+            bytes.resize(at + 0x10000u);
+            got = read_open_file(arg(ctx, 0), at, bytes.data() + at, 0x10000u);
+            bytes.resize(at + got);
+        }
+        if (const auto uid = load_user_module(rt, bytes, "file " + std::to_string(arg(ctx, 0)))) {
+            kernel().finish(ctx, *uid);
+            return;
+        }
+        load_stock_module(ctx, bytes.data(), std::min<std::size_t>(bytes.size(), 0x100u), "");
     });
     // The same by path. A path that does not open fails the way sceIoOpen
     // would have.
@@ -130,9 +143,30 @@ void register_process(HleRegistrar &hle) {
             kernel().finish(ctx, static_cast<std::uint32_t>(count));
             return;
         }
+        std::vector<std::uint8_t> bytes;
+        for (std::int64_t got = 1; got > 0;) {
+            const std::size_t at = bytes.size();
+            bytes.resize(at + 0x10000u);
+            got = read_guest_file(path, at, bytes.data() + at, 0x10000u);
+            bytes.resize(at + static_cast<std::size_t>(std::max<std::int64_t>(got, 0)));
+        }
+        if (const auto uid = load_user_module(rt, bytes, path)) {
+            kernel().finish(ctx, *uid);
+            return;
+        }
         load_stock_module(ctx, header.data(), static_cast<std::size_t>(count), " from " + path);
     });
-    for (const char *name : {"sceKernelStartModule", "sceKernelStopModule", "sceKernelUnloadModule"}) {
+    hle.add("ModuleMgrForUser", "sceKernelStartModule", [](Runtime &rt, AllegrexContext &ctx) {
+        if (start_user_module(rt, ctx, arg(ctx, 0), arg(ctx, 1), arg(ctx, 2), arg(ctx, 3))) return;
+        log_once("module-op:sceKernelStartModule", "[module] sceKernelStartModule");
+        kernel().finish(ctx, arg(ctx, 0));
+    });
+    hle.add("ModuleMgrForUser", "sceKernelUnloadModule", [](Runtime &rt, AllegrexContext &ctx) {
+        if (!unload_user_module(rt, arg(ctx, 0)))
+            log_once("module-op:sceKernelUnloadModule", "[module] sceKernelUnloadModule");
+        kernel().finish(ctx, arg(ctx, 0));
+    });
+    for (const char *name : {"sceKernelStopModule"}) {
         hle.add("ModuleMgrForUser", name, [name](Runtime &, AllegrexContext &ctx) {
             log_once(std::string("module-op:") + name, std::string("[module] ") + name);
             // sceKernelStartModule returns the module id it was given.
