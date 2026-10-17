@@ -141,7 +141,21 @@ std::string_view extra_instruction_name(std::uint32_t word) noexcept {
     return kNames[static_cast<std::size_t>(classify(word))];
 }
 
+namespace {
+IcacheHook g_icache_hook = nullptr;
+}
+
+void set_icache_invalidate_hook(IcacheHook hook) { g_icache_hook = hook; }
+
+void icache_invalidated(Runtime &rt, std::uint32_t address) {
+    if (g_icache_hook != nullptr) g_icache_hook(rt, address);
+}
+
 void execute_extra_instruction(Runtime &rt, AllegrexContext &ctx, std::uint32_t pc, std::uint32_t word) {
+    if (is_icache_op(word)) {
+        icache_invalidated(rt, ctx.gpr[(word >> 21u) & 31u] + static_cast<std::uint32_t>(static_cast<std::int16_t>(word)));
+        return;
+    }
     const Extra which = classify(word);
     if (which == Extra::None) throw Error("execute_extra_instruction: not an extra instruction");
     report_first_use(which, pc, word);

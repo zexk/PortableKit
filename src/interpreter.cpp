@@ -249,8 +249,11 @@ bool execute_simple(Runtime &rt, AllegrexContext &ctx, const DecodedInstruction 
 
     switch (d.kind) {
     case OpcodeKind::Nop: break;
-    // PSP CACHE is a hint against a cache the host mapping does not have.
-    case OpcodeKind::Cache: break;
+    // PSP CACHE is a hint against a cache the host mapping does not have,
+    // except that invalidating the instruction cache follows patched code.
+    case OpcodeKind::Cache:
+        if (is_icache_op(d.word)) icache_invalidated(rt, rs + imm);
+        break;
     case OpcodeKind::Sync: memory.memory_barrier(); break;
 
     case OpcodeKind::Addiu: ctx.set_gpr(d.rt, rs + imm); break;

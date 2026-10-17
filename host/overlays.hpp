@@ -4,6 +4,9 @@
 
 #include "psprecomp/runtime.hpp"
 
+#include <cstdint>
+#include <span>
+
 namespace portablekit {
 
 // Loads the overlay libraries and installs the dispatch-miss hook that
@@ -17,6 +20,13 @@ void install_overlay_support(psprecomp::Runtime &runtime);
 // flushes the instruction cache right after loading an overlay, which is when
 // this is called; the next jump into the slot then installs the right corpus.
 void revalidate_overlays(psprecomp::Runtime &runtime);
+
+// Registers the recompiled corpus of a user module (user_modules.hpp) whose
+// code, as it is in guest memory at `base`, is `code`: an overlay library
+// whose metadata has that base, size = code_size = the code's size, and its
+// FNV-1a hash. False when none does.
+bool install_module_corpus(psprecomp::Runtime &runtime, std::uint32_t base, std::span<const std::uint8_t> code);
+[[nodiscard]] std::uint64_t module_code_hash(std::span<const std::uint8_t> code);
 
 // The guest loaded code: a slot whose image matched no corpus is searched
 // again at the next call into it.

@@ -1,3 +1,4 @@
+#include "psprecomp/extra_instructions.hpp"
 #include "psprecomp/common.hpp"
 #include "psprecomp/decoder.hpp"
 #include "psprecomp/codegen_policy.hpp"
@@ -92,8 +93,16 @@ std::string emit_regular(const psprecomp::DecodedInstruction &d, std::uint32_t p
     switch (d.kind) {
     case psprecomp::OpcodeKind::Nop: out << "    // nop\n"; break;
     case psprecomp::OpcodeKind::Sync:
-    case psprecomp::OpcodeKind::Cache:
         out << psprecomp::codegen::memory_ordering_statement(d.kind);
+        break;
+    case psprecomp::OpcodeKind::Cache:
+        // An instruction cache invalidate follows patched code (see
+        // psprecomp::is_icache_op); the data cache ones are no-ops.
+        if (psprecomp::is_icache_op(d.word))
+            out << "    rt.execute_extra_instruction(ctx, " << psprecomp::hex32(pc) << "u, "
+                << psprecomp::hex32(d.word) << "u);\n";
+        else
+            out << psprecomp::codegen::memory_ordering_statement(d.kind);
         break;
     case psprecomp::OpcodeKind::Addiu: out << "    ctx.set_gpr(" << d.rt << ", " << reg(d.rs) << " + static_cast<std::uint32_t>(" << imm << "));\n"; break;
     case psprecomp::OpcodeKind::Slti: out << "    ctx.set_gpr(" << d.rt << ", static_cast<std::int32_t>(" << reg(d.rs) << ") < " << imm << " ? 1u : 0u);\n"; break;

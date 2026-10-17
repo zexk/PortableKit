@@ -594,7 +594,7 @@ function(_portablekit_add_overlay host_target meta_path output_dir)
         string(TOUPPER "${CMAKE_MATCH_1}" key)
         set(PORTABLEKIT_OVERLAY_${key} "${CMAKE_MATCH_2}")
     endforeach()
-    if(NOT PORTABLEKIT_OVERLAY_BASE OR NOT PORTABLEKIT_OVERLAY_SIZE OR NOT PORTABLEKIT_OVERLAY_CODE_SIZE
+    if(NOT PORTABLEKIT_OVERLAY_BASE OR NOT PORTABLEKIT_OVERLAY_SIZE OR NOT DEFINED PORTABLEKIT_OVERLAY_CODE_SIZE
        OR NOT PORTABLEKIT_OVERLAY_HASH OR NOT PORTABLEKIT_OVERLAY_NAME)
         message(WARNING "portablekit: incomplete overlay metadata in ${meta_path}")
         return()

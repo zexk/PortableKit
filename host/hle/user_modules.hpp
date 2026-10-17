@@ -29,6 +29,18 @@ std::optional<std::uint32_t> load_user_module(psprecomp::Runtime &runtime, std::
 bool start_user_module(psprecomp::Runtime &runtime, psprecomp::AllegrexContext &ctx, std::uint32_t uid,
                        std::uint32_t argument_size, std::uint32_t argument, std::uint32_t status);
 
+// Dispatch found no function at `pc`. If it lies in a user module's code
+// that has not been checked yet, installs the module's recompiled corpus
+// (overlays.hpp) when one matches its code as it now is in memory, and
+// returns true to retry; otherwise, with <prefix>_DUMP_MODULES=<dir>, writes
+// that code to <dir>/<id>.bin for recompilation and returns false.
+bool user_module_code_miss(psprecomp::Runtime &runtime, std::uint32_t pc);
+
+// The guest invalidated the instruction cache over [start, end), as it does
+// after patching code: every checked module there loses its corpus and is
+// identified again at its next run.
+void invalidate_user_module_code(psprecomp::Runtime &runtime, std::uint32_t start, std::uint32_t end);
+
 // sceKernelUnloadModule for a user module: frees its memory and drops any
 // functions registered inside it. False when `uid` is not a user module.
 bool unload_user_module(psprecomp::Runtime &runtime, std::uint32_t uid);

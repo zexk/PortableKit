@@ -56,6 +56,7 @@ void register_utils(HleRegistrar &hle) {
     const auto flush_icache = [](Runtime &rt, AllegrexContext &ctx) {
         forget_unmatched_overlays();
         revalidate_overlays(rt);
+        invalidate_user_module_code(rt, 0u, 0xFFFFFFFFu);
         kernel().finish(ctx, 0u);
     };
     hle.add("UtilsForUser", "sceKernelIcacheInvalidateAll", flush_icache);

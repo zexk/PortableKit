@@ -31,6 +31,17 @@ void execute_extra_instruction(Runtime &rt, AllegrexContext &ctx, std::uint32_t 
 // The mnemonic of an extra instruction, or an empty view when `word` is not one.
 [[nodiscard]] std::string_view extra_instruction_name(std::uint32_t word) noexcept;
 
+// CACHE on the instruction cache (op bits 1:0 = 0). The host has no cache,
+// but a game that patches code invalidates it afterwards, which is when the
+// host must stop running code compiled for the old bytes; recompiled code and
+// the interpreter both call icache_invalidated() for it.
+[[nodiscard]] inline bool is_icache_op(std::uint32_t word) noexcept {
+    return (word >> 26u) == 0x2Fu && ((word >> 16u) & 3u) == 0u;
+}
+using IcacheHook = void (*)(Runtime &rt, std::uint32_t address);
+void set_icache_invalidate_hook(IcacheHook hook);
+void icache_invalidated(Runtime &rt, std::uint32_t address);
+
 [[nodiscard]] inline bool is_extra_instruction(std::uint32_t word) noexcept {
     return !extra_instruction_name(word).empty();
 }

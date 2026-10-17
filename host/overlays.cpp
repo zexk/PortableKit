@@ -6,11 +6,13 @@
 // registered there before.
 #include "profile.hpp"
 #include "overlays.hpp"
+#include "hle/user_modules.hpp"
 
 #include "app_paths.hpp"
 #include "hle/hle_common.hpp"
 #include "overlay_module.hpp"
 #include "psprecomp/common.hpp"
+#include "psprecomp/extra_instructions.hpp"
 
 #include <algorithm>
 #include <cstdlib>
@@ -309,6 +311,7 @@ CodeMissHook g_code_miss_hook = nullptr;
 
 bool missing_function_hook(Runtime &runtime, AllegrexContext &ctx, std::uint32_t pc) {
     if (g_code_miss_hook != nullptr && g_code_miss_hook(runtime, ctx, pc)) return true;
+    if (user_module_code_miss(runtime, pc)) return true;
     return install_overlay_for(runtime, pc);
 }
 
@@ -363,8 +366,25 @@ void revalidate_overlays(Runtime &runtime) {
 void forget_unmatched_overlays() { unmatched_slots().clear(); }
 void set_code_miss_hook(CodeMissHook hook) { g_code_miss_hook = hook; }
 
+bool install_module_corpus(Runtime &runtime, std::uint32_t base, std::span<const std::uint8_t> code) {
+    const std::uint64_t hash = fnv1a64(code.data(), code.size());
+    for (const OverlayCorpus &corpus : overlay_corpora()) {
+        if (corpus.base != base || corpus.code_size != code.size() || corpus.size != code.size() || corpus.hash != hash)
+            continue;
+        corpus.install(runtime);
+        return true;
+    }
+    return false;
+}
+
+std::uint64_t module_code_hash(std::span<const std::uint8_t> code) { return fnv1a64(code.data(), code.size()); }
+
 void install_overlay_support(Runtime &runtime) {
     (void)runtime;
+    // A CACHE instruction invalidating one line of patched module code.
+    psprecomp::set_icache_invalidate_hook([](Runtime &rt, std::uint32_t address) {
+        invalidate_user_module_code(rt, address, address + 64u);
+    });
     load_overlay_libraries();
     psprecomp::set_runtime_missing_function_hook(&missing_function_hook);
     psprecomp::set_runtime_unsupported_hook(&unsupported_instruction_hook);
