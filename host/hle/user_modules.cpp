@@ -35,6 +35,7 @@ struct UserModule {
     std::vector<psprecomp::PspImport> imports; // module_start, the ELF entry when not exported, or 0 for none
     // Runs of import stubs inside the code, as offsets: [start, end).
     std::vector<std::pair<std::uint32_t, std::uint32_t>> inner_stubs;
+    bool invalidated{}; // its code was flushed from the instruction cache after it was checked
 };
 
 std::map<std::uint32_t, UserModule> &modules() {
@@ -155,7 +156,36 @@ std::optional<std::uint32_t> load_user_module(Runtime &runtime, std::span<const 
     return uid;
 }
 
-bool user_module_code_miss(Runtime &runtime, std::uint32_t pc) {
+namespace {
+bool g_skip_first_run = false;
+
+// With <prefix>_DUMP_MODULES=<dir>, writes a module's code (and the import
+// stubs inside it) for recompilation; otherwise says how to.
+void dump_module_code(const UserModule &module, const std::vector<std::uint8_t> &code, std::uint64_t hash) {
+    std::ostringstream id;
+    id << "mod" << psprecomp::hex32(module.base).substr(2) << "_" << module.name << "_" << std::hex
+       << std::uppercase << std::setw(16) << std::setfill('0') << hash;
+    if (const char *directory = env("DUMP_MODULES"); directory != nullptr) {
+        std::filesystem::create_directories(directory);
+        std::ofstream(std::filesystem::path(directory) / (id.str() + ".bin"), std::ios::binary)
+            .write(reinterpret_cast<const char *>(code.data()), static_cast<std::streamsize>(code.size()));
+        if (!module.inner_stubs.empty()) {
+            std::ofstream stubs(std::filesystem::path(directory) / (id.str() + ".stubs"));
+            for (const auto &[start, end] : module.inner_stubs) stubs << std::hex << start << "-" << end << "\n";
+        }
+        std::cout << "[module] " << module.name << " at " << psprecomp::hex32(module.base)
+                  << ": interpreted; dumped " << id.str() << ".bin\n";
+    } else {
+        log_once("module-code:" + id.str(), "[module] " + module.name + " at " + psprecomp::hex32(module.base) +
+                                                ": interpreted (" + id.str() + "); <prefix>_DUMP_MODULES=<dir> dumps it");
+    }
+}
+
+} // namespace
+
+void set_skip_module_first_run(bool skip) { g_skip_first_run = skip; }
+
+bool user_module_code_miss(Runtime &runtime, AllegrexContext &ctx, std::uint32_t pc) {
     for (auto &[uid, module] : modules()) {
         if (pc < module.base || pc >= module.base + module.code_size || module.code_checked) continue;
         // A loader may fix up a module's code once module_start has run:
@@ -169,27 +199,21 @@ bool user_module_code_miss(Runtime &runtime, std::uint32_t pc) {
         for (std::uint32_t i = 0; i < module.code_size; ++i) code[i] = runtime.memory().load8(module.base + i);
         const std::uint64_t hash = module_code_hash(code);
         module.code_hash = hash;
-        if (install_module_corpus(runtime, module.base, code)) {
+        const bool installed = install_module_corpus(runtime, module.base, code);
+        if (installed)
             std::cout << "[module] " << module.name << " at " << psprecomp::hex32(module.base) << ": recompiled code (first run at " << psprecomp::hex32(pc) << ")\n";
+        const bool skip = g_skip_first_run && module.invalidated;
+        if (installed && !skip) return true;
+        if (installed) {
+            // Nothing left to make for it.
+            runtime.stop("skipped module " + module.name + " already has recompiled code");
             return true;
         }
-        std::ostringstream id;
-        id << "mod" << psprecomp::hex32(module.base).substr(2) << "_" << module.name << "_" << std::hex
-           << std::uppercase << std::setw(16) << std::setfill('0') << hash;
-        if (const char *directory = env("DUMP_MODULES"); directory != nullptr) {
-            std::filesystem::create_directories(directory);
-            std::ofstream(std::filesystem::path(directory) / (id.str() + ".bin"), std::ios::binary)
-                .write(reinterpret_cast<const char *>(code.data()), static_cast<std::streamsize>(code.size()));
-            if (!module.inner_stubs.empty()) {
-                std::ofstream stubs(std::filesystem::path(directory) / (id.str() + ".stubs"));
-                for (const auto &[start, end] : module.inner_stubs) stubs << std::hex << start << "-" << end << "\n";
-            }
-            std::cout << "[module] " << module.name << " at " << psprecomp::hex32(module.base)
-                      << ": interpreted; dumped " << id.str() << ".bin\n";
-        } else {
-            log_once("module-code:" + id.str(), "[module] " + module.name + " at " + psprecomp::hex32(module.base) +
-                                                    ": interpreted (" + id.str() + "); <prefix>_DUMP_MODULES=<dir> dumps it");
-        }
+        dump_module_code(module, code, hash);
+        if (!skip) return false;
+        ctx.pc = ctx.gpr[31];
+        return true;
+        dump_module_code(module, code, hash);
         return false;
     }
     return false;
@@ -198,6 +222,7 @@ bool user_module_code_miss(Runtime &runtime, std::uint32_t pc) {
 void invalidate_user_module_code(Runtime &runtime, std::uint32_t start, std::uint32_t end) {
     for (auto &[uid, module] : modules()) {
         if (!module.code_checked || end <= module.base || start >= module.base + module.code_size) continue;
+        module.invalidated = true;
         // The code may have been patched: drop what was compiled for it and
         // identify it again, by its bytes then, at its next run.
         runtime.unregister_functions(module.base, module.base + module.code_size);

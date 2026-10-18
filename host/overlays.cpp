@@ -311,7 +311,7 @@ CodeMissHook g_code_miss_hook = nullptr;
 
 bool missing_function_hook(Runtime &runtime, AllegrexContext &ctx, std::uint32_t pc) {
     if (g_code_miss_hook != nullptr && g_code_miss_hook(runtime, ctx, pc)) return true;
-    if (user_module_code_miss(runtime, pc)) return true;
+    if (user_module_code_miss(runtime, ctx, pc)) return true;
     return install_overlay_for(runtime, pc);
 }
 

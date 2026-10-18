@@ -34,7 +34,13 @@ bool start_user_module(psprecomp::Runtime &runtime, psprecomp::AllegrexContext &
 // (overlays.hpp) when one matches its code as it now is in memory, and
 // returns true to retry; otherwise, with <prefix>_DUMP_MODULES=<dir>, writes
 // that code to <dir>/<id>.bin for recompilation and returns false.
-bool user_module_code_miss(psprecomp::Runtime &runtime, std::uint32_t pc);
+bool user_module_code_miss(psprecomp::Runtime &runtime, psprecomp::AllegrexContext &ctx, std::uint32_t pc);
+
+// While set, a module's first run after its code was patched (flushed from
+// the instruction cache once it had run) is identified (and dumped) as usual
+// but not run: it returns to its caller at once. For a port that starts every
+// module of a game once, to make their corpora, without entering them.
+void set_skip_module_first_run(bool skip);
 
 // The guest invalidated the instruction cache over [start, end), as it does
 // after patching code: every checked module there loses its corpus and is
