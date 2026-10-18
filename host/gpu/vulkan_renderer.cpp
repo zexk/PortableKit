@@ -8044,6 +8044,13 @@ void VulkanRenderer::shutdown() {
     vkDestroySampler(impl.device, impl.sharp_sampler, nullptr);
     vkDestroySampler(impl.device, impl.clamp_sampler, nullptr);
     vkDestroySampler(impl.device, impl.clamp_sharp_sampler, nullptr);
+    // Targets free descriptor sets from the pool, so they go before it.
+    for (auto &[address, target] : impl.targets) impl.destroy_target(target);
+    impl.targets.clear();
+    impl.destroy_target(impl.held);
+    impl.held = {};
+    impl.holding = false;
+    impl.destroy_interpolation_targets();
     vkDestroyDescriptorPool(impl.device, impl.descriptor_pool, nullptr);
     vkDestroyDescriptorSetLayout(impl.device, impl.descriptor_layout, nullptr);
     vkDestroyDescriptorSetLayout(impl.device, impl.lighting_layout, nullptr);
@@ -8054,12 +8061,6 @@ void VulkanRenderer::shutdown() {
     vkDestroyBuffer(impl.device, impl.check_buffer, nullptr);
     vkFreeMemory(impl.device, impl.check_memory, nullptr);
     vkDestroyShaderModule(impl.device, impl.fragment_shader, nullptr);
-    for (auto &[address, target] : impl.targets) impl.destroy_target(target);
-    impl.targets.clear();
-    impl.destroy_target(impl.held);
-    impl.held = {};
-    impl.holding = false;
-    impl.destroy_interpolation_targets();
     for (VkFence fence : impl.present_fences) vkDestroyFence(impl.device, fence, nullptr);
     if (impl.present_timer != VK_NULL_HANDLE) vkDestroyQueryPool(impl.device, impl.present_timer, nullptr);
     vkDestroyRenderPass(impl.device, impl.render_pass, nullptr);
