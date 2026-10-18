@@ -33,6 +33,8 @@ struct UserModule {
     bool started{};            // module_start returned, or there is none
     std::uint32_t start{};
     std::vector<psprecomp::PspImport> imports; // module_start, the ELF entry when not exported, or 0 for none
+    // Runs of import stubs inside the code, as offsets: [start, end).
+    std::vector<std::pair<std::uint32_t, std::uint32_t>> inner_stubs;
 };
 
 std::map<std::uint32_t, UserModule> &modules() {
@@ -113,9 +115,24 @@ std::optional<std::uint32_t> load_user_module(Runtime &runtime, std::span<const 
     module.imports = elf.scan_imports(runtime.memory(), *info);
     // The code a corpus is built from ends where the import stubs begin:
     // compiled, a stub is two plain instructions, and a call to it from the
-    // same unit would skip the HLE.
-    for (const auto &import : module.imports)
-        module.code_size = std::min(module.code_size, import.stub_address - base);
+    // same unit would skip the HLE. A module may keep some stubs inside its
+    // code (Metal Gear Solid: Portable Ops' kjfs, for zlibdec): the code ends
+    // at the last run of stubs, and the runs before it are left out of the
+    // corpus (dumped beside the code as <id>.stubs).
+    std::vector<std::pair<std::uint32_t, std::uint32_t>> runs;
+    std::vector<std::uint32_t> stubs;
+    for (const auto &import : module.imports) stubs.push_back(import.stub_address - base);
+    std::sort(stubs.begin(), stubs.end());
+    for (const std::uint32_t stub : stubs) {
+        if (!runs.empty() && stub <= runs.back().second) runs.back().second = std::max(runs.back().second, stub + 8u);
+        else runs.emplace_back(stub, stub + 8u);
+    }
+    if (!runs.empty()) {
+        module.code_size = std::min(module.code_size, runs.back().first);
+        runs.pop_back();
+        for (const auto &run : runs)
+            if (run.second <= module.code_size) module.inner_stubs.push_back(run);
+    }
     for (const auto &import : module.imports) {
         if (!runtime.has_hle(import.library, import.nid)) {
             ++missing;
@@ -163,6 +180,10 @@ bool user_module_code_miss(Runtime &runtime, std::uint32_t pc) {
             std::filesystem::create_directories(directory);
             std::ofstream(std::filesystem::path(directory) / (id.str() + ".bin"), std::ios::binary)
                 .write(reinterpret_cast<const char *>(code.data()), static_cast<std::streamsize>(code.size()));
+            if (!module.inner_stubs.empty()) {
+                std::ofstream stubs(std::filesystem::path(directory) / (id.str() + ".stubs"));
+                for (const auto &[start, end] : module.inner_stubs) stubs << std::hex << start << "-" << end << "\n";
+            }
             std::cout << "[module] " << module.name << " at " << psprecomp::hex32(module.base)
                       << ": interpreted; dumped " << id.str() << ".bin\n";
         } else {

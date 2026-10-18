@@ -4,9 +4,11 @@
 The recompiler works on ELF images, while overlays are raw code the game copies
 into a slot at run time. This builds the smallest ELF that carries the same
 bytes at the same address, with one PT_LOAD and one executable .text section so
-the analyzer treats the whole blob as code.
+the analyzer treats the whole blob as code. Each --exclude START-END (byte
+offsets into the dump) is left out of .text, which is then split around it:
+import stubs inside a module's code, which must be reached through the HLE.
 
-Usage: wrap_overlay.py <overlay.bin> <base_address> <output.elf>
+Usage: wrap_overlay.py <overlay.bin> <base_address> <output.elf> [--exclude START-END ...]
 """
 
 import struct
@@ -19,6 +21,11 @@ SHSTRTAB = b"\0.text\0.shstrtab\0"
 
 
 def main(argv):
+    excluded = []
+    while len(argv) > 4 and argv[-2] == "--exclude":
+        start, end = (int(text, 0) for text in argv[-1].split("-"))
+        excluded.append((start, end))
+        argv = argv[:-2]
     if len(argv) != 4:
         print(__doc__.strip(), file=sys.stderr)
         return 2
@@ -31,6 +38,13 @@ def main(argv):
     data_offset = EHDR_SIZE + PHDR_SIZE
     shstrtab_offset = data_offset + len(data)
     shdr_offset = shstrtab_offset + len(SHSTRTAB)
+    pieces, cursor = [], 0
+    for start, end in sorted(excluded):
+        if start > cursor:
+            pieces.append((cursor, start))
+        cursor = max(cursor, end)
+    if cursor < len(data):
+        pieces.append((cursor, len(data)))
 
     ehdr = struct.pack(
         "<16sHHIIIIIHHHHHH",
@@ -42,17 +56,18 @@ def main(argv):
         EHDR_SIZE,    # phoff
         shdr_offset,  # shoff
         0x10A23001,   # flags, as produced by the PSP toolchain
-        EHDR_SIZE, PHDR_SIZE, 1, SHDR_SIZE, 3, 2,
+        EHDR_SIZE, PHDR_SIZE, 1, SHDR_SIZE, len(pieces) + 2, len(pieces) + 1,
     )
     phdr = struct.pack("<8I", 1, data_offset, base, base, len(data), len(data), 5, 0x10)
     null_shdr = b"\0" * SHDR_SIZE
-    text_shdr = struct.pack(
-        "<10I", 1, 1, 0x6, base, data_offset, len(data), 0, 0, 0x10, 0)  # PROGBITS, ALLOC|EXECINSTR
+    text_shdrs = b"".join(
+        struct.pack("<10I", 1, 1, 0x6, base + start, data_offset + start, end - start, 0, 0, 4, 0)  # PROGBITS, ALLOC|EXECINSTR
+        for start, end in pieces)
     shstrtab_shdr = struct.pack(
         "<10I", 7, 3, 0, 0, shstrtab_offset, len(SHSTRTAB), 0, 0, 1, 0)  # STRTAB
 
     with open(argv[3], "wb") as out:
-        out.write(ehdr + phdr + data + SHSTRTAB + null_shdr + text_shdr + shstrtab_shdr)
+        out.write(ehdr + phdr + data + SHSTRTAB + null_shdr + text_shdrs + shstrtab_shdr)
     print(f"wrote {argv[3]}: {len(data)} bytes at {base:#010x}")
     return 0
 
