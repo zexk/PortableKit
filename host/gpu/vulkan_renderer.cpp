@@ -1318,6 +1318,10 @@ struct VulkanRenderer::Impl {
     // Something was drawn or uploaded since the last flip: the flip shows a
     // new frame of the game, not one it has already shown.
     bool frame_changed{};
+    // How long a present between flips waits for a swapchain image.
+    std::uint64_t acquire_timeout_ns{3'000'000u};
+    // The image the last flip without interpolation presented.
+    VkImage last_presented_source{};
     VkDeviceSize vertex_limit{kVertexBufferBytes};
     VkDeviceSize index_limit{kIndexBufferBytes};
     void enter_region(std::uint32_t index) {
@@ -7097,7 +7101,11 @@ bool VulkanRenderer::Impl::poll_presents(std::chrono::steady_clock::time_point n
     const auto present = present_clock.take(to_us(now));
     if (!present) return false;
     const auto start = std::chrono::steady_clock::now();
+    // While the game's code runs, a present takes a free image or none: with
+    // vsync, waiting for one held the game a refresh at every present.
+    acquire_timeout_ns = idle ? 3'000'000u : 0u;
     const bool made = present_between(*present, account);
+    acquire_timeout_ns = 3'000'000u;
     if (!idle) busy_presents += std::chrono::steady_clock::now() - start;
     return made;
 }
@@ -7146,7 +7154,7 @@ bool VulkanRenderer::Impl::present_between(const pacing::PresentClock::Present &
     std::uint32_t image_index = 0u;
     const perf::Clock::time_point acquire_start = perf::Clock::now();
     const VkResult acquired =
-        vkAcquireNextImageKHR(device, swapchain, 3'000'000u, acquire_semaphore(commands), VK_NULL_HANDLE, &image_index);
+        vkAcquireNextImageKHR(device, swapchain, acquire_timeout_ns, acquire_semaphore(commands), VK_NULL_HANDLE, &image_index);
     perf::add_wait_time(perf::Clock::now() - acquire_start, perf::Stall::Acquire);
     if (acquired == VK_ERROR_OUT_OF_DATE_KHR) swapchain_dirty = true;
     if (acquired == VK_SUBOPTIMAL_KHR) swapchain_check = true;
@@ -7833,7 +7841,15 @@ bool VulkanRenderer::present(std::uint32_t display_address,
     }
     // The game's frame as it is, at its flip.
     if (impl.cycle_active || impl.newer_frame.valid) impl.reset_interpolation();
+    // A buffer shown again with nothing new in it is on screen already;
+    // presenting it again would wait a refresh for nothing.
+    if (!impl.frame_changed && source == impl.last_presented_source && !impl.fast_forward) {
+        impl.submit_frame();
+        impl.follow_window();
+        return false;
+    }
     impl.frame_changed = false;
+    impl.last_presented_source = source;
     if (impl.fast_forward) {
         // A load running fast: the flip is drawn, and shown only when the
         // window has not had a picture for a while, so the display's refresh
