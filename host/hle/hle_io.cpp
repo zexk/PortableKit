@@ -475,10 +475,12 @@ std::int64_t lseek_op(std::uint32_t fd, std::int64_t offset, std::uint32_t whenc
     case 1u: base = static_cast<std::int64_t>(file.position); break;
     case 2u: base = static_cast<std::int64_t>(file.size); break;
     default:
+        if (trace_io()) std::cerr << "[io] lseek fd=" << fd << " " << file.path << " whence=" << whence << ": invalid\n";
         return static_cast<std::int32_t>(io_error::kInvalidArgument);
     }
     const std::int64_t target = base + offset;
     if (target < 0) {
+        if (trace_io()) std::cerr << "[io] lseek fd=" << fd << " " << file.path << " to " << target << ": invalid\n";
         return static_cast<std::int32_t>(io_error::kInvalidArgument);
     }
     file.position = static_cast<std::uint64_t>(target);
@@ -538,7 +540,7 @@ std::uint32_t collect_async(Runtime &rt, std::uint32_t fd, std::uint32_t result_
 //   0x01020006  its first sector on the disc (4 bytes out). Patapon asks it
 //               of each archive it opens, before it seeks and reads.
 //   0x01020007  its size in bytes (4 bytes out).
-//   0x01010005  seek: 16 bytes in, a 64-bit byte offset and a 32-bit whence
+//   0x01010005  seek: 16 bytes in, a 64-bit byte offset, an unused word and a 32-bit whence
 //               (0 from the start, 1 from here, 2 from the end). Patapon
 //               seeks its archives so, all from the start, then reads.
 // Anything else is logged once and answered 0, as before.
@@ -579,10 +581,12 @@ std::uint32_t ioctl_op(Runtime &rt, AllegrexContext &ctx) {
         file.position = 0u;
         return 0u;
     }
-    if (file.kind == OpenFile::Kind::Disc && command == 0x01010005u && input != 0u && input_size >= 12u) {
+    // Seek: the 64-bit offset, then a word nothing reads, then whence at +12.
+    // Metal Gear Solid Portable Ops' file system module leaves +8 unset.
+    if (file.kind == OpenFile::Kind::Disc && command == 0x01010005u && input != 0u && input_size >= 16u) {
         const auto offset = static_cast<std::int64_t>(static_cast<std::uint64_t>(memory.load32(input)) |
                                                       (static_cast<std::uint64_t>(memory.load32(input + 4u)) << 32u));
-        const std::int64_t position = lseek_op(fd, offset, memory.load32(input + 8u));
+        const std::int64_t position = lseek_op(fd, offset, memory.load32(input + 12u));
         return position < 0 ? static_cast<std::uint32_t>(position) : 0u;
     }
     if (file.kind == OpenFile::Kind::Disc && !file.sector_units && output != 0u && output_size >= 4u) {
@@ -689,6 +693,9 @@ void register_async_io(HleRegistrar &hle) {
             kernel().finish(ctx, error);
             return;
         }
+        if (trace_io())
+            std::cerr << "[io] lseek async fd=" << arg(ctx, 0) << " offset=" << arg64(ctx, 2) << " whence=" << arg(ctx, 4)
+                      << " ra=" << psprecomp::hex32(ctx.gpr[31]) << "\n";
         complete_async(*file, lseek_op(arg(ctx, 0), static_cast<std::int64_t>(arg64(ctx, 2)), arg(ctx, 4)));
         kernel().finish(ctx, 0u);
     });
