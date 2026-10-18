@@ -43,7 +43,25 @@ std::map<std::uint32_t, UserModule> &modules() {
 // Every import of an exported function enters its code, as the PSP's loader
 // links them; the caller's jal has already set ra.
 void bind_export(Runtime &runtime, const std::string &library, std::uint32_t nid, std::uint32_t address) {
-    runtime.register_hle(library, nid, [address](Runtime &, AllegrexContext &ctx) { ctx.pc = address; });
+    static const bool trace = env("TRACE_MODULES") != nullptr;
+    const std::string label = library + "::" + psprecomp::hex32(nid);
+    runtime.register_hle(library, nid, [address, label](Runtime &rt, AllegrexContext &ctx) {
+        std::string text;  // a0 as a string, when it points at one
+        if (trace && rt.memory().contains(ctx.gpr[4], 1u)) {
+            for (std::uint32_t i = 0; i < 64u && rt.memory().contains(ctx.gpr[4] + i, 1u); ++i) {
+                const auto c = static_cast<char>(rt.memory().load8(ctx.gpr[4] + i));
+                if (c == '\0') break;
+                if (c < 0x20 || c > 0x7E) { text.clear(); break; }
+                text += c;
+            }
+        }
+        if (trace)
+            std::cerr << "[module-call] " << label << (text.size() > 2 ? " \"" + text + "\"" : "")
+                      << " a0=" << psprecomp::hex32(ctx.gpr[4]) << " a1="
+                      << psprecomp::hex32(ctx.gpr[5]) << " a2=" << psprecomp::hex32(ctx.gpr[6])
+                      << " ra=" << psprecomp::hex32(ctx.gpr[31]) << "\n";
+        ctx.pc = address;
+    });
 }
 
 } // namespace

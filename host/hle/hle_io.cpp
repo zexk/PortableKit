@@ -511,9 +511,11 @@ OpenFile *async_handle(std::uint32_t fd, std::uint32_t &error) {
     const auto found = io().files.find(fd);
     if (found == io().files.end()) {
         error = io_error::kBadFileDescriptor;
+        if (trace_io()) std::cerr << "[io] async call on unknown fd=" << fd << "\n";
         return nullptr;
     }
     if (found->second.release_after_async) {
+        if (trace_io()) std::cerr << "[io] async call on fd=" << fd << " being released\n";
         error = async_error::kBusy;
         return nullptr;
     }
