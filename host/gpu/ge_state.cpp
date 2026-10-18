@@ -1183,17 +1183,6 @@ PatchWeights bezier_weights(std::uint32_t index, std::uint32_t divisions, std::u
     return {cubic * 3u, {s * s * s, 3.0f * t * s * s, 3.0f * t * t * s, t * t * t}};
 }
 
-std::uint32_t blend_color(const std::array<const Vertex *, 16> &points, const std::array<float, 16> &weights) {
-    std::uint32_t out = 0u;
-    for (std::uint32_t shift = 0u; shift < 32u; shift += 8u) {
-        float channel = 0.0f;
-        for (std::size_t k = 0; k < 16u; ++k)
-            channel += weights[k] * static_cast<float>((points[k]->color >> shift) & 0xFFu);
-        out |= static_cast<std::uint32_t>(std::clamp(channel + 0.5f, 0.0f, 255.0f)) << shift;
-    }
-    return out;
-}
-
 bool trace_patches() {
     static const bool enabled = portablekit::env("TRACE_PATCHES") != nullptr;
     return enabled;
@@ -1296,32 +1285,52 @@ void GeState::draw_patch(const GuestMemory &memory, std::uint32_t command, std::
     call.index_address = index_type != 0u ? index_address_ : 0u;
     call.primitive_count = count;
     call.vertices.reserve(static_cast<std::size_t>(u_samples) * v_samples);
-    std::array<const Vertex *, 16> around{};
-    std::array<float, 16> weight{};
+    // A control point as floats (position, normal, texture coordinates and
+    // the colour's channels), all blended alike.
+    constexpr std::size_t kFields = 13u;
+    using Fields = std::array<float, kFields>;
+    std::vector<Fields> control(count);
+    for (std::uint32_t k = 0; k < count; ++k) {
+        const Vertex &point = points[point_index[k] - lowest];
+        Fields &fields = control[k];
+        std::copy(point.position.begin(), point.position.end(), fields.begin());
+        std::copy(point.normal.begin(), point.normal.end(), fields.begin() + 4);
+        std::copy(point.texcoord.begin(), point.texcoord.end(), fields.begin() + 7);
+        for (std::uint32_t c = 0; c < 4u; ++c) fields[9u + c] = static_cast<float>((point.color >> (8u * c)) & 0xFFu);
+    }
+    // A sample's weights are one along u times one along v, so each row of
+    // samples blends the rows of control points along v once, and each sample
+    // then blends four of those columns along u.
+    std::vector<Fields> columns(u_count);
     for (std::uint32_t j = 0; j < v_samples; ++j) {
+        const PatchWeights &wv = v_weights[j];
+        for (std::uint32_t column = 0; column < u_count; ++column) {
+            Fields sum{};
+            for (std::uint32_t b = 0; b < 4u; ++b) {
+                const Fields &point = control[(wv.first + b) * u_count + column];
+                for (std::size_t k = 0; k < kFields; ++k) sum[k] += wv.weight[b] * point[k];
+            }
+            columns[column] = sum;
+        }
         for (std::uint32_t i = 0; i < u_samples; ++i) {
             const PatchWeights &wu = u_weights[i];
-            const PatchWeights &wv = v_weights[j];
-            for (std::uint32_t b = 0; b < 4u; ++b) {
-                for (std::uint32_t a = 0; a < 4u; ++a) {
-                    const std::uint32_t k = b * 4u + a;
-                    around[k] = &points[point_index[(wv.first + b) * u_count + wu.first + a] - lowest];
-                    weight[k] = wu.weight[a] * wv.weight[b];
-                }
+            Fields sum{};
+            for (std::uint32_t a = 0; a < 4u; ++a) {
+                const Fields &column = columns[wu.first + a];
+                for (std::size_t k = 0; k < kFields; ++k) sum[k] += wu.weight[a] * column[k];
             }
             Vertex out{};
-            out.position = {0.0f, 0.0f, 0.0f, 0.0f};
-            for (std::size_t k = 0; k < 16u; ++k) {
-                for (std::size_t c = 0; c < 4u; ++c) out.position[c] += weight[k] * around[k]->position[c];
-                for (std::size_t c = 0; c < 3u; ++c) out.normal[c] += weight[k] * around[k]->normal[c];
-                for (std::size_t c = 0; c < 2u; ++c) out.texcoord[c] += weight[k] * around[k]->texcoord[c];
-            }
+            std::copy(sum.begin(), sum.begin() + 4, out.position.begin());
+            std::copy(sum.begin() + 4, sum.begin() + 7, out.normal.begin());
+            std::copy(sum.begin() + 7, sum.begin() + 9, out.texcoord.begin());
             // Without texture coordinates of its own a surface is textured
             // by where on it a point lies.
             if (!has_texcoord)
                 out.texcoord = {static_cast<float>(i) / static_cast<float>(u_samples - 1u),
                                 static_cast<float>(j) / static_cast<float>(v_samples - 1u)};
-            out.color = blend_color(around, weight);
+            out.color = 0u;
+            for (std::uint32_t c = 0; c < 4u; ++c)
+                out.color |= static_cast<std::uint32_t>(std::clamp(sum[9u + c] + 0.5f, 0.0f, 255.0f)) << (8u * c);
             call.vertices.push_back(out);
         }
     }
