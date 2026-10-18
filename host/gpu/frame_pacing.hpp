@@ -57,7 +57,9 @@ inline constexpr double kRates[] = {30.0, 45.0, 60.0, 90.0, 120.0};
 
 class PresentClock {
 public:
-    // Presents per game frame; 1 or less stops the clock.
+    // Presents per game frame of the game's own length (game_frame_us()); 1
+    // or less stops the clock. A game whose frame is longer for a while gets
+    // proportionally more presents per frame (flip()).
     void set_presents_per_frame(double presents) noexcept;
     [[nodiscard]] double presents_per_frame() const noexcept { return per_frame_; }
     // A new game frame, for the moment `time_us` of real time, flipped at
@@ -91,17 +93,24 @@ public:
     static constexpr std::size_t kWorkRank = 8;  // how many of the window may be later
 
 private:
+    // Spaces the grid for the presents asked for over frames of frame_us_.
+    void apply_grid() noexcept;
     // The grid moment `index`, and when it is presented.
     [[nodiscard]] std::int64_t moment(std::int64_t index) const noexcept;
     [[nodiscard]] std::int64_t due(std::int64_t index) const noexcept { return moment(index) + delay_us(); }
 
-    double per_frame_{1.0};
+    double requested_{1.0};  // presents per frame of game_frame_us()
+    double per_frame_{1.0};  // presents per frame of frame_us_
     // The shortest step from a frame's moment to the next grid moment.
     std::int64_t first_step_us_{game_frame_us()};
     std::int64_t work_us_{kWorkMarginUs};
     std::vector<std::int64_t> work_window_;  // the last frames' code time, oldest first
     std::size_t work_cursor_{};
     std::int64_t frame_us_{game_frame_us()};
+    // The interval between the last flips, in whole vblanks, and how many
+    // times running it came.
+    std::int64_t seen_us_{};
+    int seen_count_{};
     bool has_newer_{};
     bool has_older_{};
     std::int64_t newer_us_{};

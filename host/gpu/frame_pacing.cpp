@@ -13,6 +13,8 @@ namespace {
 constexpr std::int64_t kRealignUs = 2000;
 // A gap of this many frames between two flips (a load, a pause) starts over.
 constexpr std::int64_t kGapFrames = 10;
+// Frames of one new length running before the grid takes it.
+constexpr int kSettleFrames = 3;
 
 int &frame_vblanks() {
     static int vblanks = 2;
@@ -47,14 +49,20 @@ double plain_presents_per_frame(double rate) noexcept {
 }
 
 void PresentClock::set_presents_per_frame(double presents) noexcept {
-    if (presents == per_frame_) return;
-    per_frame_ = presents;
+    if (presents == requested_) return;
+    requested_ = presents;
+    apply_grid();
+}
+
+void PresentClock::apply_grid() noexcept {
+    per_frame_ = requested_ <= 1.0 ? requested_
+                                   : requested_ * static_cast<double>(frame_us_) / static_cast<double>(game_frame_us());
     first_step_us_ = frame_us_;
-    if (presents > 1.0) {
+    if (per_frame_ > 1.0) {
         // The grid repeats after the few frames plain_presents_per_frame
         // finds; the smallest offset of a grid moment into its frame over
         // them is the first step.
-        const double step = static_cast<double>(frame_us_) / presents;
+        const double step = static_cast<double>(frame_us_) / per_frame_;
         for (int index = 1; index <= 64; ++index) {
             const auto offset = static_cast<std::int64_t>(std::llround(index * step)) % frame_us_;
             if (offset > 0) first_step_us_ = std::min(first_step_us_, offset);
@@ -78,6 +86,22 @@ std::int64_t PresentClock::delay_us() const noexcept { return frame_us_ - first_
 
 void PresentClock::flip(std::int64_t time_us, std::int64_t now_us) noexcept {
     if (has_newer_ && (time_us <= newer_us_ || time_us - newer_us_ > kGapFrames * frame_us_)) reset();
+    // A game may make 30 frames a second in one scene and 20 in the next
+    // (Metal Gear Solid: Portable Ops): an interval of whole vblanks that
+    // comes kSettleFrames times running becomes the frame the grid spaces
+    // its presents over.
+    if (has_newer_) {
+        const std::int64_t vblank_us = kGameFrameUs / 2;
+        const std::int64_t length =
+            std::clamp<std::int64_t>(std::llround(static_cast<double>(time_us - newer_us_) / vblank_us), 1, 4) * vblank_us;
+        seen_count_ = length == seen_us_ ? seen_count_ + 1 : 1;
+        seen_us_ = length;
+        if (seen_count_ >= kSettleFrames && length != frame_us_) {
+            frame_us_ = length;
+            apply_grid();
+            anchored_ = false;
+        }
+    }
     // The code time a present allows for: the (kWorkRank + 1)th longest of
     // the window, so that a few late frames do not keep every present late.
     const std::int64_t work = std::clamp<std::int64_t>(now_us - time_us, 0, frame_us_) + kWorkMarginUs;

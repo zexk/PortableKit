@@ -1315,6 +1315,9 @@ struct VulkanRenderer::Impl {
     // turn with it (see kFrameRegions).
     std::uint32_t frame_region{};
     std::uint32_t next_region{};
+    // Something was drawn or uploaded since the last flip: the flip shows a
+    // new frame of the game, not one it has already shown.
+    bool frame_changed{};
     VkDeviceSize vertex_limit{kVertexBufferBytes};
     VkDeviceSize index_limit{kIndexBufferBytes};
     void enter_region(std::uint32_t index) {
@@ -5689,6 +5692,7 @@ void VulkanRenderer::upload_frame(std::uint32_t display_address, const std::uint
     Impl &impl = *impl_;
     if (!impl.ready || pixels == nullptr || width == 0u || height == 0u || stride < width) return;
     if (!impl.recording) begin_frame();
+    impl.frame_changed = true;
     impl.end_pass();
     std::string error;
     if (impl.upload_extent.width != width || impl.upload_extent.height != height) {
@@ -5793,6 +5797,7 @@ void VulkanRenderer::begin_display_list() {
 void VulkanRenderer::submit(const DrawCall &call, const GuestMemory &memory) {
     Impl &impl = *impl_;
     if (!impl.ready) return;
+    impl.frame_changed = true;
     const perf::SplitScope split(perf::Split::Draw);
     if (!impl.recording) begin_frame();
     // Presents between flips fall due while the game draws, too: a busy
@@ -6979,6 +6984,21 @@ void VulkanRenderer::Impl::finish_interpolated_frame(VkImage source, std::uint32
     const perf::SplitScope split(perf::Split::Interp);
     FrameRecord &frame = recording_frame;
     frame.recorded = frame.recorded && interpolating;
+    // A game that draws a frame while it shows the one before (Metal Gear
+    // Solid: Portable Ops) flips to the buffer it drew a frame ago: the frame
+    // just recorded is complete in the other buffer, and that is the picture
+    // its draws make.
+    if (std::none_of(frame.summaries.begin(), frame.summaries.end(),
+                     [displayed](const interpolation::DrawSummary &draw) { return draw.target == displayed; })) {
+        const auto drawn = std::find_if(frame.summaries.rbegin(), frame.summaries.rend(),
+                                        [](const interpolation::DrawSummary &draw) { return draw.perspective; });
+        if (drawn != frame.summaries.rend()) {
+            if (const auto target = targets.find(drawn->target); target != targets.end()) {
+                displayed = drawn->target;
+                source = target->second.color;
+            }
+        }
+    }
     interpolation::mark_eligible(frame.summaries, displayed, cut_thresholds.orthographic);
     frame.displayed = displayed;
     frame.moment_us = moment_us;
@@ -7786,6 +7806,16 @@ bool VulkanRenderer::present(std::uint32_t display_address,
         impl.frame_ui = impl.ui_draw_data;
         impl.ui_draw_data = nullptr;
         const std::int64_t moment_us = moment ? to_us(*moment) : to_us(now);
+        // A game may set the frame buffer several times a frame, showing a
+        // buffer again with nothing new in it (Metal Gear Solid: Portable
+        // Ops): that is not a frame to blend towards.
+        if (!impl.frame_changed && impl.newer_frame.valid) {
+            impl.submit_frame();
+            impl.follow_window();
+            impl.poll_presents(std::chrono::steady_clock::now(), false, false);
+            return false;
+        }
+        impl.frame_changed = false;
         impl.finish_interpolated_frame(source, impl.presented_target, moment_us);
         impl.submit_frame();
         ++impl.frames;
@@ -7803,6 +7833,7 @@ bool VulkanRenderer::present(std::uint32_t display_address,
     }
     // The game's frame as it is, at its flip.
     if (impl.cycle_active || impl.newer_frame.valid) impl.reset_interpolation();
+    impl.frame_changed = false;
     if (impl.fast_forward) {
         // A load running fast: the flip is drawn, and shown only when the
         // window has not had a picture for a while, so the display's refresh

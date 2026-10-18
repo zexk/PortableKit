@@ -562,8 +562,27 @@ void sixty() {
     set_game_frame_vblanks(2);
 }
 
+// A 30 fps game that slows to 20 for a while: the clock spaces its presents
+// over the longer frame once it has come a few times running, and back.
+void adaptive_frame() {
+    PresentClock clock;
+    clock.set_presents_per_frame(presents_per_frame(60.0));
+    const std::int64_t vblank = kGameFrameUs / 2;
+    std::int64_t time = 1'000'000;
+    for (int i = 0; i < 4; ++i, time += 3 * vblank) clock.flip(time, time);
+    check(clock.frame_us() == 3 * vblank && clock.presents_per_frame() == 3.0,
+          "frames of three vblanks get three presents each at 60");
+    for (int i = 0; i < 4; ++i, time += 2 * vblank) clock.flip(time, time);
+    check(clock.frame_us() == 2 * vblank && clock.presents_per_frame() == 2.0, "and two vblanks two again");
+    clock.flip(time, time);
+    time += 3 * vblank;
+    clock.flip(time, time);
+    check(clock.frame_us() == 2 * vblank, "one long frame alone changes nothing");
+}
+
 int main() {
     blending();
+    adaptive_frame();
     rigid();
     guards();
     matching();
