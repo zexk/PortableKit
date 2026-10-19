@@ -929,6 +929,7 @@ InterpreterExit interpret_allegrex(Runtime &rt, AllegrexContext &ctx,
         }
 
         ctx.pc = pc;
+        set_runtime_dispatch_pc(pc);
         if (!g_watch.empty() && std::binary_search(g_watch.begin(), g_watch.end(), pc))
             report_watch(rt, ctx, pc);
         const DecodedInstruction decoded = decode_allegrex(memory.aot_load32(pc));
