@@ -56,7 +56,8 @@ inline constexpr std::size_t kParamsHashModeOffset = 0x70u;     // mode 3 or 5 h
 [[nodiscard]] Block data_file_hash(std::span<const std::uint8_t> encrypted_file, CryptMode mode,
                                    const Block *game_key);
 
-// Encrypts `plain`, padded with zeros to a multiple of 16 bytes; the result
+// Encrypts `plain`, unpadded: the cipher is a key stream, and a game may
+// check that a load gives back exactly the size it saved. The result
 // starts with the 16-byte header. `random` stands in for the random number
 // the PSP draws for the header.
 [[nodiscard]] std::vector<std::uint8_t> encrypt_data(std::span<const std::uint8_t> plain, CryptMode mode,

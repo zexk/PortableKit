@@ -93,12 +93,11 @@ void test_encryption() {
     for (const CryptMode mode : {CryptMode::Mode1, CryptMode::Mode3, CryptMode::Mode5}) {
         const std::string name = "mode " + std::to_string(static_cast<int>(mode)) + ": ";
         const auto encrypted = encrypt_data(plain, mode, &key, random);
-        check(encrypted.size() == kEncryptedHeaderSize + 5008u, (name + "encryption adds the header and pads to 16").c_str());
+        check(encrypted.size() == kEncryptedHeaderSize + 5000u, (name + "encryption adds the header and no padding").c_str());
         check(!std::equal(plain.begin(), plain.end(), encrypted.begin() + kEncryptedHeaderSize),
               (name + "encrypted data differs from the plaintext").c_str());
         const auto decrypted = decrypt_data(encrypted, mode, &key);
-        check(decrypted && std::equal(plain.begin(), plain.end(), decrypted->begin()) &&
-                  std::all_of(decrypted->begin() + 5000, decrypted->end(), [](std::uint8_t b) { return b == 0u; }),
+        check(decrypted && *decrypted == plain,
               (name + "decryption restores the plaintext").c_str());
         if (mode == CryptMode::Mode1) continue;
         Block other = key;

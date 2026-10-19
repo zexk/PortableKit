@@ -158,7 +158,7 @@ std::vector<std::uint8_t> encrypt_data(std::span<const std::uint8_t> plain, Cryp
     std::fill(seed.begin() + 12, seed.end(), std::uint8_t{0});
     const Block header = masked(kirk_key(p.header_seed).encrypt(masked(seed, p.header_mask_out)), p.header_mask_in);
 
-    std::vector<std::uint8_t> out(kEncryptedHeaderSize + ((plain.size() + 15u) & ~std::size_t{15u}), 0u);
+    std::vector<std::uint8_t> out(kEncryptedHeaderSize + plain.size(), 0u);
     std::copy(header.begin(), header.end(), out.begin());
     std::copy(plain.begin(), plain.end(), out.begin() + kEncryptedHeaderSize);
     apply_stream(std::span(out).subspan(kEncryptedHeaderSize), header, mode,
