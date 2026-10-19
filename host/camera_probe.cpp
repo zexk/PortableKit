@@ -579,7 +579,66 @@ void find_step_field(psprecomp::Runtime &runtime, float turn) {
     }
 }
 
+// <prefix>_TRACE_WORDS=0xADDRESS:COUNT prints COUNT words from ADDRESS on every
+// frame they change, for watching a structure found by reading the game's code
+// while the game runs. @0xADDRESS:COUNT follows the pointer stored at ADDRESS
+// first, for a structure the game allocates.
+void trace_words(psprecomp::Runtime &runtime) {
+    static const char *text = portablekit::env("TRACE_WORDS");
+    if (text == nullptr) return;
+    static const auto [address, count] = [] {
+        char *end = nullptr;
+        const bool indirect = *text == '@';
+        const std::uint32_t at = static_cast<std::uint32_t>(std::strtoul(text + (indirect ? 1 : 0), &end, 0));
+        const std::uint32_t n = *end == ':' ? static_cast<std::uint32_t>(std::strtoul(end + 1, nullptr, 0)) : 1u;
+        return std::pair{indirect ? at | 1u : at, n};
+    }();
+    static std::vector<std::uint32_t> previous;
+    static std::uint64_t frame = 0u;
+    ++frame;
+    const std::uint32_t *words =
+        reinterpret_cast<const std::uint32_t *>(runtime.memory().raw_pointer(address, count * 4u));
+    if (words == nullptr) return;
+    if (address & 1u) {
+        // Indirect: `words` holds the pointer, and the structure is where it points.
+        const std::uint32_t *pointer =
+            reinterpret_cast<const std::uint32_t *>(runtime.memory().raw_pointer(address & ~1u, 4u));
+        if (pointer == nullptr || *pointer == 0u) return;
+        words = reinterpret_cast<const std::uint32_t *>(runtime.memory().raw_pointer(*pointer, count * 4u));
+        if (words == nullptr) return;
+    }
+    std::vector<std::uint32_t> now(words, words + count);
+    if (now == previous) return;
+    std::cout << "[words] frame " << frame << std::hex;
+    for (std::uint32_t i = 0; i < count; ++i) std::cout << ' ' << std::setw(8) << std::setfill('0') << now[i];
+    std::cout << std::dec << std::setfill(' ') << "\n";
+    previous.swap(now);
+}
+
+// <prefix>_DUMP_RAM=DIR:EVERY writes all of guest RAM to DIR/<frame>.bin every
+// EVERY frames, for searching offline for a variable no single trace can find.
+void dump_ram(psprecomp::Runtime &runtime) {
+    static const char *text = portablekit::env("DUMP_RAM");
+    if (text == nullptr) return;
+    static const auto [directory, every] = [] {
+        const std::string spec(text);
+        const std::size_t colon = spec.rfind(':');
+        return std::pair{spec.substr(0, colon), colon == std::string::npos ? 30ul : std::stoul(spec.substr(colon + 1))};
+    }();
+    static std::uint64_t frame = 0u;
+    if (frame++ % every != 0u) return;
+    psprecomp::GuestMemory &memory = runtime.memory();
+    const std::uint32_t base = psprecomp::GuestMemory::kPhysicalBase;
+    const std::uint8_t *ram = memory.raw_pointer(base, memory.size());
+    if (ram == nullptr) return;
+    std::ofstream(directory + "/" + std::to_string(frame - 1u) + ".bin", std::ios::binary)
+        .write(reinterpret_cast<const char *>(ram), static_cast<std::streamsize>(memory.size()));
+    std::cout << "[dump-ram] frame " << (frame - 1u) << std::endl;
+}
+
 void camera_frame(psprecomp::Runtime &runtime, std::uint32_t view_matrix_source) {
+    trace_words(runtime);
+    dump_ram(runtime);
     poke_floats(runtime);
 
     find_and_poke_int32(runtime);
