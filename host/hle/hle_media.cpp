@@ -805,6 +805,32 @@ void audio_output(Runtime &rt, AllegrexContext &ctx) {
             for (std::size_t i = 0; i < frames * 2u; ++i)
                 peak = std::max(peak, std::abs((static_cast<std::int32_t>(staging[i]) * gains[i & 1u]) >> 15));
             load_trace::note_audio_peak(peak);
+            // <prefix>_TRACE_AUDIO: each channel's calls, volumes and loudest
+            // sample, before and after its volume, once a second.
+            static const bool trace_channels = portablekit::env("TRACE_AUDIO") != nullptr;
+            if (trace_channels) {
+                struct Stat {
+                    std::uint32_t calls, left, right, buffer;
+                    int raw, peak;
+                };
+                static std::array<Stat, 8> stats{};
+                static std::uint64_t reported = 0u;
+                Stat &stat = stats[channel];
+                ++stat.calls;
+                stat.left = left;
+                stat.right = right;
+                stat.buffer = buffer;
+                stat.peak = std::max(stat.peak, peak);
+                for (std::size_t i = 0; i < frames * 2u; ++i) stat.raw = std::max(stat.raw, std::abs(int{staging[i]}));
+                if (const std::uint64_t now = kernel().now_us(); now - reported >= 1'000'000u) {
+                    reported = now;
+                    for (std::size_t c = 0; c < stats.size(); ++c)
+                        if (stats[c].calls != 0u)
+                            std::printf("[audio] ch%zu calls=%u vol=%u/%u buf=%08x raw=%d peak=%d\n", c, stats[c].calls,
+                                        stats[c].left, stats[c].right, stats[c].buffer, stats[c].raw, stats[c].peak);
+                    stats = {};
+                }
+            }
             // While a load runs faster than real time its silence is dropped:
             // played, it would pile up faster than the device plays it. The
             // channel's cursor stays where it was and catches up with the
