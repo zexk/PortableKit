@@ -603,7 +603,7 @@ endfunction()
 function(_portablekit_add_overlay host_target meta_path output_dir)
     get_filename_component(source_dir "${meta_path}" DIRECTORY)
     get_filename_component(PORTABLEKIT_OVERLAY_PREFIX "${source_dir}" NAME)
-    file(STRINGS "${meta_path}" meta_lines REGEX "^(base|size|code_size|hash|name)=")
+    file(STRINGS "${meta_path}" meta_lines REGEX "^(base|size|code_size|hash|name|units)=")
     foreach(line IN LISTS meta_lines)
         string(REGEX MATCH "^([a-z_]+)=(.+)$" matched "${line}")
         if(NOT matched)
@@ -628,12 +628,44 @@ function(_portablekit_add_overlay host_target meta_path output_dir)
 
     set(target "overlay_${PORTABLEKIT_OVERLAY_PREFIX}")
     add_library(${target} MODULE ${sources} "${entry_point}")
-    target_compile_features(${target} PRIVATE cxx_std_20)
-    _portablekit_inherit_settings(${target})
-    # Headers only: linking psprecomp_core would give the module its own copy
-    # of the runtime state the host already owns.
-    target_include_directories(${target} PRIVATE
-        "${source_dir}" "${PORTABLEKIT_ROOT}/host" "${PORTABLEKIT_ROOT}/include")
+    # Units several modules share (copies of one module that differ in a few
+    # units) may live in <profile>/units/<group>/, named in meta.txt as
+    # units=<group> ...: each group is one object library, compiled once and
+    # linked into every module that names it.
+    target_include_directories(${target} PRIVATE "${source_dir}")
+    set(compiled ${target})
+    string(REPLACE " " ";" groups "${PORTABLEKIT_OVERLAY_UNITS}")
+    foreach(group IN LISTS groups)
+        set(group_target "${host_target}_units_${group}")
+        if(NOT TARGET ${group_target})
+            file(GLOB group_sources CONFIGURE_DEPENDS "${GAME_PROFILE_DIR}/units/${group}/*.cpp")
+            add_library(${group_target} OBJECT ${group_sources})
+            set_target_properties(${group_target} PROPERTIES POSITION_INDEPENDENT_CODE ON)
+            list(APPEND compiled ${group_target})
+        endif()
+        target_sources(${target} PRIVATE $<TARGET_OBJECTS:${group_target}>)
+    endforeach()
+    foreach(library IN LISTS compiled)
+        target_compile_features(${library} PRIVATE cxx_std_20)
+        _portablekit_inherit_settings(${library})
+        # Headers only: linking psprecomp_core would give the module its own copy
+        # of the runtime state the host already owns.
+        target_include_directories(${library} PRIVATE "${PORTABLEKIT_ROOT}/host" "${PORTABLEKIT_ROOT}/include")
+        if(MSVC)
+            target_compile_definitions(${library} PRIVATE PSPRECOMP_IMPORT_HOST_SYMBOLS=1)
+            if(PSPRECOMP_GENERATED_OPT_LEVEL STREQUAL "0")
+                target_compile_options(${library} PRIVATE /Od /bigobj)
+            else()
+                target_compile_options(${library} PRIVATE /O${PSPRECOMP_GENERATED_OPT_LEVEL} /Ob0 /bigobj)
+            endif()
+        else()
+            target_compile_options(${library} PRIVATE -O${PSPRECOMP_GENERATED_OPT_LEVEL} -g0)
+        endif()
+        set_target_properties(${library} PROPERTIES
+            JOB_POOL_COMPILE psprecomp_generated
+            CXX_VISIBILITY_PRESET hidden
+            VISIBILITY_INLINES_HIDDEN ON)
+    endforeach()
     if(WIN32 OR APPLE OR PORTABLEKIT_ANDROID_APP)
         # Both linkers want the host binary while linking the module: MSVC for
         # its import library, ld64 as the bundle loader. ELF leaves the host
@@ -649,23 +681,10 @@ function(_portablekit_add_overlay host_target meta_path output_dir)
             target_link_options(${target} PRIVATE "LINKER:-z,undefs")
         endif()
     endif()
-    if(MSVC)
-        target_compile_definitions(${target} PRIVATE PSPRECOMP_IMPORT_HOST_SYMBOLS=1)
-        if(PSPRECOMP_GENERATED_OPT_LEVEL STREQUAL "0")
-            target_compile_options(${target} PRIVATE /Od /bigobj)
-        else()
-            target_compile_options(${target} PRIVATE /O${PSPRECOMP_GENERATED_OPT_LEVEL} /Ob0 /bigobj)
-        endif()
-    else()
-        target_compile_options(${target} PRIVATE -O${PSPRECOMP_GENERATED_OPT_LEVEL} -g0)
-    endif()
     if(PORTABLEKIT_RELEASE_LINK_OPTIONS)
         target_link_options(${target} PRIVATE ${PORTABLEKIT_RELEASE_LINK_OPTIONS})
     endif()
     set_target_properties(${target} PROPERTIES
-        JOB_POOL_COMPILE psprecomp_generated
-        CXX_VISIBILITY_PRESET hidden
-        VISIBILITY_INLINES_HIDDEN ON
         PREFIX ""
         SUFFIX "${CMAKE_SHARED_LIBRARY_SUFFIX}"
         OUTPUT_NAME "${PORTABLEKIT_OVERLAY_PREFIX}"
