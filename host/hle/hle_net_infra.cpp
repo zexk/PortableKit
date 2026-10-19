@@ -23,6 +23,7 @@
 #include "psprecomp/common.hpp"
 
 #include <algorithm>
+#include <cctype>
 #include <atomic>
 #include <chrono>
 #include <cstdio>
@@ -1149,6 +1150,29 @@ void register_net_infra(HleRegistrar &hle) {
             write_cstring(memory, out, text, needed);
         }
         done(ctx, "sceUriBuild", 5, 0u, text);
+    });
+    // (out, size needed out, out size, text): percent-encodes all but
+    // letters, digits and "-_.~". Without an out, only the size is given.
+    hle.add("sceParseUri", "sceUriEscape", [](Runtime &rt, AllegrexContext &ctx) {
+        auto &memory = rt.memory();
+        const std::uint32_t out = arg(ctx, 0), needed_out = arg(ctx, 1), out_size = arg(ctx, 2);
+        std::string text;
+        for (const char c : read_cstring(memory, arg(ctx, 3), 4096u)) {
+            if (std::isalnum(static_cast<unsigned char>(c)) != 0 || std::strchr("-_.~", c) != nullptr) {
+                text += c;
+            } else {
+                char hex[4];
+                std::snprintf(hex, sizeof hex, "%%%02X", static_cast<unsigned char>(c));
+                text += hex;
+            }
+        }
+        const auto needed = static_cast<std::uint32_t>(text.size()) + 1u;
+        if (needed_out != 0u) memory.store32(needed_out, needed);
+        if (out != 0u) {
+            if (out_size < needed) return done(ctx, "sceUriEscape", 4, kHttpFailed);
+            write_cstring(memory, out, text, needed);
+        }
+        done(ctx, "sceUriEscape", 4, 0u);
     });
 
     // (user agent, http version, use system proxy)
