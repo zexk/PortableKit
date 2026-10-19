@@ -451,6 +451,19 @@ void register_rtc_calendar(HleRegistrar &hle) {
         if (arg(ctx, 1) != 0u) store64(rt.memory(), arg(ctx, 1), (*tick - rtc::kUnixEpochTick) / rtc::kTicksPerSecond);
         kernel().finish(ctx, 0u);
     });
+    // sceRtcGetTime_t(const ScePspDateTime *, u32 *time): the same in 32 bits.
+    // Metal Gear Solid: Portable Ops Plus (ULUS10290) calls it online.
+    hle.add("sceRtc", "sceRtcGetTime_t", [](Runtime &rt, AllegrexContext &ctx) {
+        const auto tick = rtc::to_tick(read_date(rt.memory(), arg(ctx, 0)));
+        if (!tick || *tick < rtc::kUnixEpochTick) {
+            kernel().finish(ctx, kRtcInvalidDate);
+            return;
+        }
+        if (arg(ctx, 1) != 0u)
+            rt.memory().store32(arg(ctx, 1),
+                                static_cast<std::uint32_t>((*tick - rtc::kUnixEpochTick) / rtc::kTicksPerSecond));
+        kernel().finish(ctx, 0u);
+    });
     hle.add("sceRtc", "sceRtcGetTickResolution", [](Runtime &, AllegrexContext &ctx) {
         rtc_unverified("sceRtcGetTickResolution");
         kernel().finish(ctx, static_cast<std::uint32_t>(rtc::kTicksPerSecond));

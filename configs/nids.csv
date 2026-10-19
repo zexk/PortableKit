@@ -325,6 +325,7 @@ sceRtc,0xE51B4B7A,sceRtcTickAddDays
 sceRtc,0xCF3A2CA8,sceRtcTickAddWeeks
 sceRtc,0xC41C2853,sceRtcGetTickResolution
 sceRtc,0xE1C93E47,sceRtcGetTime64_t
+sceRtc,0x27C4594C,sceRtcGetTime_t
 sceSasCore,0x019B25EB,__sceSasSetADSR
 sceSasCore,0x07F58C24,__sceSasGetAllEnvelopeHeights
 sceSasCore,0x267A6DD2,__sceSasRevParam

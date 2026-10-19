@@ -43,6 +43,7 @@ NIDs are added to `configs/nids.csv` only where the first word of SHA-1 of the n
 | `scePower*ClockFrequency*`, `scePower_EBD177D6` | God of War, Patapon, Chinatown Wars (Set), PSP2i (GetCpu) | the clocks set are reported back; `0xEBD177D6` is named after public NID lists, and the arguments games pass (333, 333, 166) fit |
 | `sceKernelSetCompiledSdkVersion370` (`0x342061E5`) | God of War, Patapon, MHP2G | named after public NID lists; called with 0x03070010 |
 | `sceKernelDcacheWritebackInvalidateRange`, `sceKernelReleaseWaitThread`, `sceRtcGetTime64_t` | PSP2i | nothing to do; RELEASE_WAIT; seconds since 1970 |
+| `sceRtcGetTime_t` | Portable Ops Plus | seconds since 1970, 32-bit |
 | `sceKernelPowerLock`, `sceKernelPowerUnlock` | God of War, PSP2i | 0 |
 | PGD files (`sceIoIoctl 0x04100001`) | PSP2i (the call and the missing-key report) | see `docs/DESKTOP_APP.md`, "PGD data"; decryption itself not yet checked on a real file |
 
