@@ -498,6 +498,23 @@ inline constexpr const char *kBuildLabel = \"${PORTABLEKIT_BUILD_LABEL}\";
         # line it would rebuild all of them when the checkout moves.
         set_property(SOURCE "${PORTABLEKIT_ROOT}/host/main.cpp" APPEND PROPERTY COMPILE_DEFINITIONS
             PORTABLEKIT_DEFAULT_GAME_DIR="${GAME_PROFILE_DIR}/game")
+        # The font a release ships in fonts/ (packaging/sources.sh), so a
+        # development build shows text on a system the font search finds
+        # nothing on. Without a network it is only missed.
+        set(font "${CMAKE_BINARY_DIR}/bin/fonts/NotoSansCJKjp-Regular.otf")
+        if(NOT EXISTS "${font}")
+            file(STRINGS "${PORTABLEKIT_ROOT}/packaging/sources.sh" sources REGEX "^NOTO_CJK_(TAG|SHA256)=")
+            string(REGEX MATCH "NOTO_CJK_TAG=([^;]+)" _ "${sources}")
+            set(tag "${CMAKE_MATCH_1}")
+            string(REGEX MATCH "NOTO_CJK_SHA256=([0-9a-f]+)" _ "${sources}")
+            file(DOWNLOAD "https://github.com/notofonts/noto-cjk/raw/${tag}/Sans/OTF/Japanese/NotoSansCJKjp-Regular.otf"
+                "${font}" EXPECTED_HASH SHA256=${CMAKE_MATCH_1} STATUS status)
+            list(GET status 0 code)
+            if(NOT code EQUAL 0)
+                file(REMOVE "${font}")
+                message(WARNING "Could not fetch the fallback font (${status}); text may stay blank where no font is found")
+            endif()
+        endif()
     elseif(CMAKE_SYSTEM_NAME STREQUAL "Linux")
         set_target_properties(${target} PROPERTIES BUILD_WITH_INSTALL_RPATH TRUE INSTALL_RPATH "$ORIGIN/lib")
         # The C++ runtime is linked in statically, so a build made against an
