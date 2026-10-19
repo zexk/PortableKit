@@ -202,6 +202,7 @@ bool user_module_code_miss(Runtime &runtime, AllegrexContext &ctx, std::uint32_t
         const bool installed = install_module_corpus(runtime, module.base, code);
         if (installed)
             std::cout << "[module] " << module.name << " at " << psprecomp::hex32(module.base) << ": recompiled code (first run at " << psprecomp::hex32(pc) << ")\n";
+        if (game().module_code_ready != nullptr) game().module_code_ready(runtime, module.name, module.base, code);
         const bool skip = g_skip_first_run && module.invalidated;
         if (installed && !skip) return true;
         if (installed) {

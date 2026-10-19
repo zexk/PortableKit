@@ -246,6 +246,13 @@ struct GameProfile {
     // Called once the executable is in memory and before it runs, for the
     // per-game patches that have no better home. Null means there are none.
     void (*patch_loaded_image)(psprecomp::Runtime &, const psprecomp::Elf32Image &) = nullptr;
+    // Called when a user module's code is in place and about to run for the
+    // first time (again after it was patched), with its bytes as they are then
+    // and after its recompiled code, if any, was registered: the place for a
+    // game whose code lives in modules it loads to find and wrap a function
+    // there. Null means there is nothing to do.
+    void (*module_code_ready)(psprecomp::Runtime &, std::string_view name, std::uint32_t base,
+                              std::span<const std::uint8_t> code) = nullptr;
 
     // --- The game's camera and view ----------------------------------------
     // Drives the game's own camera from what the player asks of it
