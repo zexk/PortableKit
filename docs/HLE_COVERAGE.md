@@ -6,7 +6,7 @@ Three kinds of answer:
 
 - **Verified on a game**: traced against a game calling it, with what the game does afterwards; the game named is the one it was checked with.
 - **UNVERIFIED**: written from documentation (the SDK's headers and public descriptions), not yet seen called by any game. Each prints one line with `UNVERIFIED` the first time a game calls it, so the first game that does shows up in its log.
-- **Not connected, by design**: infrastructure networking. It answers as a PSP with networking but no access point: libraries initialise, nothing connects.
+- **Offline fallback**: with `<prefix>_NET_OFFLINE=1`, infrastructure networking answers as a PSP with networking but no access point: libraries initialise, nothing connects.
 
 NIDs are added to `configs/nids.csv` only where the first word of SHA-1 of the name matches, except the three randomized ones named after public NID lists, which say so below.
 
@@ -61,9 +61,22 @@ Written from documentation; each logs `UNVERIFIED` on its first call.
 - **scePspNpDrm_user**: `SetLicenseeKey`, `EdataSetupKey` (accepted; nothing decrypts with them yet).
 - **sceUmdUser**: `Deactivate`.
 
-## Not connected, by design
+## Infrastructure networking
 
-`hle_net_offline.cpp`. Every call logs `UNVERIFIED` on first use.
+`hle_net_infra.cpp`, through the host's own network. Traced against Metal Gear Solid: Portable Ops Plus (`ULUS-10290`) as far as its terms-of-use request. `<prefix>_TRACE_NET=1` logs every call.
+
+| Library | Answer |
+| --- | --- |
+| sceNetApctl | the access point is always joinable: `Connect` (and the network dialog's actions 0, 1 and 3) runs the handlers through joining, getting an address and got-address; `GetInfo` reports the host's first IPv4 address |
+| sceNetResolver | `StartNtoA` resolves through the host, after the profile's `infrastructure_host` |
+| sceNetInet | sockets are host sockets: TCP and UDP, blocking and non-blocking, `select`, socket options, `InetAton` |
+| sceHttp, sceHttps | requests are made from the host over HTTP/1.1, after the profile's `infrastructure_url`; cookies, redirects and chunked bodies are handled. HTTPS is not spoken |
+| sceParseUri | `UriParse` and `UriBuild` |
+| sceWlanDrv | the wireless switch is on while infrastructure networking is |
+
+## Offline fallback
+
+`hle_net_offline.cpp`, with `<prefix>_NET_OFFLINE=1` and for what the infrastructure layer does not replace. Every call logs `UNVERIFIED` on first use.
 
 | Library | Answer |
 | --- | --- |

@@ -66,6 +66,7 @@ set(PORTABLEKIT_HOST_SOURCES
     host/hle/hle_psmfplayer.cpp
     host/hle/hle_psmf.cpp
     host/hle/hle_net_offline.cpp
+    host/hle/hle_net_infra.cpp
     host/fonts/game_font.cpp
     host/hle/hle_font.cpp
     host/hle/hle_utility.cpp

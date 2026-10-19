@@ -213,6 +213,14 @@ struct GameProfile {
     // disc id is a different one.
     const char *adhoc_product_code;
 
+    // --- Infrastructure (internet) play -------------------------------------
+    // The original servers of most PSP games are gone, and a community server
+    // may stand in for them. These get the host name, or the URL, the game
+    // asks for and return the one to use instead. Null: used as the game
+    // gives them.
+    std::string (*infrastructure_host)(std::string_view host) = nullptr;
+    std::string (*infrastructure_url)(std::string_view url) = nullptr;
+
     // --- Controls ----------------------------------------------------------
     // What the triggers may press instead of L and R, for the way this game is
     // played. Empty: they press L and R, and the menu offers nothing else.

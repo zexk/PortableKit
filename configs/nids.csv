@@ -152,6 +152,11 @@ sceHttp,0xF9D8EB63,sceHttpsEnd
 sceHttp,0xFCF8C055,sceHttpDeleteTemplate
 sceHttp,0x76D1363B,sceHttpSaveSystemCookie
 sceHttp,0xF1657B22,sceHttpLoadSystemCookie
+sceHttp,0x47940436,sceHttpSetResolveTimeOut
+sceHttp,0xB3FAF831,sceHttpsDisableOption
+sceHttp,0xBAC31BF1,sceHttpsEnableOption
+sceParseUri,0x568518C9,sceUriParse
+sceParseUri,0x7EE318AF,sceUriBuild
 sceImpose,0x36AA6E91,sceImposeSetLanguageMode
 sceImpose,0x72189C48,sceImposeSetUMDPopup
 sceImpose,0x24FD7BCF,sceImposeGetLanguageMode
@@ -287,6 +292,7 @@ sceNetInet,0x162E6FD5,sceNetInetGetsockname
 sceNetInet,0x5BE8D595,sceNetInetSelect
 sceNetInet,0xFBABE411,sceNetInetGetErrno
 sceNetInet,0xD0792666,sceNetInetInetNtop
+sceNetInet,0x1BDF5D13,sceNetInetInetAton
 sceOpenPSID,0xC69BEBCE,sceOpenPSIDGetOpenPSID
 scePower,0x04B7766E,scePowerRegisterCallback
 scePower,0x469989AD,scePowerSetClockFrequency630

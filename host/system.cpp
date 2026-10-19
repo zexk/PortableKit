@@ -5,6 +5,7 @@
 
 #include "hle/hle_common.hpp"
 #include "hle/hle_extensions.hpp"
+#include "hle/hle_net_infra.hpp"
 #include "kernel/kernel.hpp"
 #include "overlays.hpp"
 
@@ -92,6 +93,7 @@ void install_system(Runtime &runtime, const psprecomp::Elf32Image &elf, const Pr
     register_psmfplayer(hle);
     register_psmf(hle);
     register_net_offline(hle);
+    register_net_infra(hle);
     register_font(hle);
     register_utility(hle, paths.memory_stick);
     register_adhoc(hle);

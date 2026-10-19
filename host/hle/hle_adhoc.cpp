@@ -21,6 +21,7 @@
 #include "adhoc/client.hpp"
 #include "adhoc/session.hpp"
 #include "settings/settings.hpp"
+#include "hle_net_infra.hpp"
 #include "utility_dialog.hpp"
 
 #include "psprecomp/common.hpp"
@@ -92,6 +93,8 @@ constexpr std::uint32_t kAdhocChannel = 1u;
 // Netconf: SceUtilityNetconfParam after the common dialog header.
 constexpr std::uint32_t kNetconfAction = 0x30u;
 constexpr std::uint32_t kNetconfAdhocParam = 0x34u;
+constexpr std::uint32_t kNetconfActionDisplayStatus = 1u;  // 0 connects to an access point
+constexpr std::uint32_t kNetconfActionConnectLastUsed = 3u;  // the access point used last
 constexpr std::uint32_t kNetconfActionConnectAdhoc = 2u;
 constexpr std::uint32_t kNetconfResultCancelled = 1u;
 
@@ -331,9 +334,9 @@ void register_net(HleRegistrar &hle) {
         if (arg(ctx, 0) != 0u) write_mac(rt.memory(), arg(ctx, 0), own_mac());
         done(ctx, "sceWlanGetEtherAddr", 1, 0u, adhoc::format_mac(own_mac()));
     });
-    // The wireless switch is the ad hoc setting: off, the game says so itself.
+    // The wireless switch: on for ad hoc play (the setting) or internet play.
     hle.add("sceWlanDrv", "sceWlanGetSwitchState", [](Runtime &, AllegrexContext &ctx) {
-        done(ctx, "sceWlanGetSwitchState", 0, settings::current().adhoc ? 1u : 0u);
+        done(ctx, "sceWlanGetSwitchState", 0, settings::current().adhoc || net_infra_enabled() ? 1u : 0u);
     });
 }
 
@@ -920,6 +923,10 @@ void register_netconf(HleRegistrar &hle) {
                 netconf.joining = true;
                 Client::get().join(group);
             }
+        } else if ((action <= kNetconfActionDisplayStatus || action == kNetconfActionConnectLastUsed) && net_infra_enabled()) {
+            // Infrastructure: the access point is the host's network, joined at once.
+            net_infra_connect();
+            netconf.result = 0u;
         }
         done(ctx, "sceUtilityNetconfInitStart", 1, 0u, note);
     });
