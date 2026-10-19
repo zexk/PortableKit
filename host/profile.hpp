@@ -100,6 +100,9 @@ struct CameraDriver {
     // The port is driving the camera right now, so the game must not also act
     // on the second stick: its own turn would fight the driver's.
     bool (*driving)() = nullptr;
+    // The game swaps the two sticks' roles in first person, and the driver can
+    // swap them back when the player asks (Settings::swap_sticks_first_person).
+    bool swaps_first_person = false;
     // The game is aiming under the driver: the second stick goes to the game
     // stretched to full length, so the game's aim code steps and the driver
     // sizes each step.

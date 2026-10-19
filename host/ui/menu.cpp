@@ -772,6 +772,15 @@ void Menu::controls() {
             s.analog_camera = !s.analog_camera;
             settings::save();
         }
+        if (driver->swaps_first_person) {
+            o = options_for("input.swap_sticks_first_person",
+                            "In first person the game looks with the movement stick and moves with the camera "
+                            "stick. On swaps them back: move with the left stick, look with the right.");
+            if (toggle_row("Swap sticks in first person", s.swap_sticks_first_person, o)) {
+                s.swap_sticks_first_person = !s.swap_sticks_first_person;
+                settings::save();
+            }
+        }
         o = options_for("input.camera_speed", "How fast the camera turns at full deflection, in degrees a second.");
         if (!s.analog_camera && !o.disabled) {
             o.disabled = true;
@@ -942,6 +951,7 @@ void Menu::controls() {
         restore("input.right_stick", s.right_stick, d.right_stick);
         restore("input.right_stick_zone", s.right_stick_zone, d.right_stick_zone);
         restore("input.analog_camera", s.analog_camera, d.analog_camera);
+        restore("input.swap_sticks_first_person", s.swap_sticks_first_person, d.swap_sticks_first_person);
         restore("input.camera_speed", s.camera_speed, d.camera_speed);
         restore("input.aim_speed", s.aim_speed, d.aim_speed);
         restore("input.invert_camera_x", s.invert_camera_x, d.invert_camera_x);
