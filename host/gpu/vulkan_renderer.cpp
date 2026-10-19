@@ -1479,6 +1479,7 @@ struct VulkanRenderer::Impl {
         std::uint32_t skinned{kNone}; // FrameRecord::skinned: the vertices of a group of skinned draws
         bool raw{};                   // drawn from the guest's vertex bytes at vertex_base (first instance)
         std::uint32_t raw_block{kNone}; // FrameRecord::raws: its format and bones
+        bool solid{};                 // depth tested and written, not blended: scenery, not effects
     };
     struct FrameRecord {
         std::vector<interpolation::DrawSummary> summaries;
@@ -1529,6 +1530,7 @@ struct VulkanRenderer::Impl {
         std::uint64_t groups{};  // draw calls recorded again
         std::uint64_t flipbook_steps{};  // texture offsets not blended: a flipbook's step
         std::uint64_t followed{};        // draw calls without a partner moved with the camera only
+        std::uint64_t brought{};         // draw calls only the newer frame has, carried back along the camera
         std::uint32_t rejected{};        // pairs given up: moved too far on their own
         std::uint32_t rejected_shared{}; // of those, with other draws of the same mesh
         float max_own_motion{};
@@ -6948,6 +6950,7 @@ void VulkanRenderer::Impl::record_draw_for_replay(const DrawCall &call, bool lit
         }
         added.skinned = skinned;
         added.raw = raw;
+        added.solid = !call.clear_mode && !call.through && call.depth.test_enabled && call.depth.write_enabled && !call.blend.enabled;
         if (raw && ((call.vertex_type >> 9u) & 3u) != 0u) {
             // A skinned raw group is blended through its bones.
             if (frame.raws.empty() || frame.raw_offset != raw_offset) {
@@ -7306,18 +7309,100 @@ void VulkanRenderer::Impl::replay(VkCommandBuffer commands, std::uint32_t slot, 
     std::uint64_t replayed = 0u;
     std::uint64_t flipbook_steps = 0u;
     std::uint64_t followed = 0u;
+    std::uint64_t brought = 0u;
     // <prefix>_INTERPOLATION_NO_FLIPBOOK_GUARD blends texture offsets up to
     // half the texture, as before; <prefix>_INTERPOLATION_NO_MOTION_GUARD
     // leaves draws without a partner where the older frame drew them.
     static const bool flipbook_guard = portablekit::env("INTERPOLATION_NO_FLIPBOOK_GUARD") == nullptr;
     static const bool motion_guard = portablekit::env("INTERPOLATION_NO_MOTION_GUARD") == nullptr;
 
+    const auto emit = [&](const ReplayGroup &drawn, const DrawState &state, VkDeviceSize vertex_base) {
+        if (!known || std::memcmp(&state.viewport, &set.viewport, sizeof(VkViewport)) != 0)
+            vkCmdSetViewport(commands, 0u, 1u, &state.viewport);
+        if (!known || state.blend != set.blend) vkCmdSetBlendConstants(commands, state.blend.data());
+        if (!known || std::memcmp(&state.scissor, &set.scissor, sizeof(VkRect2D)) != 0)
+            vkCmdSetScissor(commands, 0u, 1u, &state.scissor);
+        if (!known || state.pipeline != set.pipeline)
+            vkCmdBindPipeline(commands, VK_PIPELINE_BIND_POINT_GRAPHICS, state.pipeline);
+        if (!known || state.texture != set.texture)
+            vkCmdBindDescriptorSets(commands, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline_layout, 0u, 1u,
+                                    &state.texture, 0u, nullptr);
+        if (!known || state.lighting != set.lighting)
+            vkCmdBindDescriptorSets(commands, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline_layout, 1u, 1u,
+                                    &lighting_descriptor, static_cast<std::uint32_t>(state.lighting.size()),
+                                    state.lighting.data());
+        if (!known || std::memcmp(&state.push, &set.push, sizeof(PushConstants)) != 0)
+            vkCmdPushConstants(commands, pipeline_layout, VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT,
+                               0u, sizeof(PushConstants), &state.push);
+        set = state;
+        known = true;
+        vkCmdBindVertexBuffers(commands, 0u, 1u, &vertex_buffer, &vertex_base);
+        if (drawn.index_buffer != VK_NULL_HANDLE) {
+            vkCmdBindIndexBuffer(commands, drawn.index_buffer, drawn.index_base, VK_INDEX_TYPE_UINT16);
+            vkCmdDrawIndexed(commands, drawn.count, 1u, 0u, 0,
+                             drawn.raw ? static_cast<std::uint32_t>(vertex_base) : 0u);
+        } else {
+            vkCmdDraw(commands, drawn.count, 1u, 0u, 0u);
+        }
+        ++replayed;
+    };
+    const auto note_region = [&](VkDeviceSize vertex_base) {
+        // The regions this replay reads, for present_regions.
+        if (vertex_base < static_cast<VkDeviceSize>(kFrameRegions) * kVertexBufferBytes)
+            replay_regions |= 1u << static_cast<std::uint32_t>(vertex_base / kVertexBufferBytes);
+    };
+
+    // Solid 3D draws only the newer frame has: scenery a turning camera brings into
+    // view, which the game drew only once it was there. Replaying the older
+    // frame alone leaves holes at the edge it turns towards until the next
+    // frame; these are carried back along the camera's motion to where they
+    // stand at `t`, as draws only the older frame has are carried forward, and
+    // drawn where the newer frame drew them among the paired draws, since
+    // what covers what can depend on the order.
+    const bool bring = t > 0.0f && motion_guard && camera_motion.valid;
+    std::vector<char> paired;
+    interpolation::Matrix back{};
+    if (bring) {
+        paired.assign(newer.summaries.size(), 0);
+        for (const std::int32_t partner : matching.newer_of)
+            if (partner >= 0) paired[static_cast<std::size_t>(partner)] = 1;
+        back = interpolation::multiply(interpolation::rigid_at(camera_motion, t), camera_motion.inverse);
+    }
+    std::size_t next_newer = 0u;
+    const auto bring_newer = [&](std::size_t until) {
+        for (; bring && next_newer < until && next_newer < newer.groups.size(); ++next_newer) {
+            const ReplayGroup &drawn = newer.groups[next_newer];
+            if (drawn.target != newer.displayed || !drawn.solid || !newer.summaries[drawn.first_draw].eligible)
+                continue;
+            bool alone = true;
+            for (std::uint32_t i = drawn.first_draw; i < drawn.first_draw + drawn.draws && alone; ++i)
+                alone = paired[i] == 0;
+            if (!alone) continue;
+            const interpolation::DrawSummary &to = newer.summaries[drawn.first_draw];
+            // Only what the older frame could not have shown: its origin, where
+            // the older camera saw it, lies off that frame's screen or near its
+            // edge (an object coming in may have its origin in view before its
+            // bounds were). Something well in view the game simply did not draw
+            // then (a blinking marker) is left as the older frame had it.
+            const interpolation::Matrix was = interpolation::multiply(
+                camera_motion.inverse, interpolation::multiply(to.view, to.world));
+            const interpolation::Matrix clip = interpolation::multiply(to.projection, was);
+            const float w = clip[15];
+            if (w > 0.0f && std::fabs(clip[12]) <= 0.75f * w && std::fabs(clip[13]) <= 0.75f * w) continue;
+            const interpolation::Matrix eye = interpolation::multiply(back, interpolation::multiply(to.view, to.world));
+            DrawState state = drawn.state;
+            state.push.transform = interpolation::multiply(to.projection, eye);
+            state.push.view_z = {eye[2], eye[6], eye[10], eye[14]};
+            note_region(drawn.vertex_base);
+            emit(drawn, state, drawn.vertex_base);
+            ++brought;
+        }
+    };
+
     replay_regions = 0u;
     for (const ReplayGroup &drawn : older.groups) {
         if (drawn.target != older.displayed) continue;
-        // The regions this replay reads, for present_regions.
-        if (drawn.vertex_base < static_cast<VkDeviceSize>(kFrameRegions) * kVertexBufferBytes)
-            replay_regions |= 1u << static_cast<std::uint32_t>(drawn.vertex_base / kVertexBufferBytes);
+        note_region(drawn.vertex_base);
         DrawState state = drawn.state;
         VkDeviceSize vertex_base = drawn.vertex_base;
         std::int32_t partner = -1;
@@ -7344,6 +7429,7 @@ void VulkanRenderer::Impl::replay(VkCommandBuffer commands, std::uint32_t slot, 
             view_pair = projection_pair = world_pair = Pair{};
             ++followed;
         }
+        if (partner >= 0) bring_newer(newer.group_of[static_cast<std::size_t>(partner)]);
         if (partner >= 0 && t > 0.0f) {
             const interpolation::DrawSummary &from = older.summaries[member];
             const interpolation::DrawSummary &to = newer.summaries[static_cast<std::size_t>(partner)];
@@ -7455,39 +7541,14 @@ void VulkanRenderer::Impl::replay(VkCommandBuffer commands, std::uint32_t slot, 
             }
         }
 
-        if (!known || std::memcmp(&state.viewport, &set.viewport, sizeof(VkViewport)) != 0)
-            vkCmdSetViewport(commands, 0u, 1u, &state.viewport);
-        if (!known || state.blend != set.blend) vkCmdSetBlendConstants(commands, state.blend.data());
-        if (!known || std::memcmp(&state.scissor, &set.scissor, sizeof(VkRect2D)) != 0)
-            vkCmdSetScissor(commands, 0u, 1u, &state.scissor);
-        if (!known || state.pipeline != set.pipeline)
-            vkCmdBindPipeline(commands, VK_PIPELINE_BIND_POINT_GRAPHICS, state.pipeline);
-        if (!known || state.texture != set.texture)
-            vkCmdBindDescriptorSets(commands, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline_layout, 0u, 1u,
-                                    &state.texture, 0u, nullptr);
-        if (!known || state.lighting != set.lighting)
-            vkCmdBindDescriptorSets(commands, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline_layout, 1u, 1u,
-                                    &lighting_descriptor, static_cast<std::uint32_t>(state.lighting.size()),
-                                    state.lighting.data());
-        if (!known || std::memcmp(&state.push, &set.push, sizeof(PushConstants)) != 0)
-            vkCmdPushConstants(commands, pipeline_layout, VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT,
-                               0u, sizeof(PushConstants), &state.push);
-        set = state;
-        known = true;
-        vkCmdBindVertexBuffers(commands, 0u, 1u, &vertex_buffer, &vertex_base);
-        if (drawn.index_buffer != VK_NULL_HANDLE) {
-            vkCmdBindIndexBuffer(commands, drawn.index_buffer, drawn.index_base, VK_INDEX_TYPE_UINT16);
-            vkCmdDrawIndexed(commands, drawn.count, 1u, 0u, 0,
-                             drawn.raw ? static_cast<std::uint32_t>(vertex_base) : 0u);
-        } else {
-            vkCmdDraw(commands, drawn.count, 1u, 0u, 0u);
-        }
-        ++replayed;
+        emit(drawn, state, vertex_base);
     }
+    bring_newer(newer.groups.size());
     vkCmdEndRenderPass(commands);
     interpolation_stats.groups += replayed;
     interpolation_stats.flipbook_steps += flipbook_steps;
     interpolation_stats.followed += followed;
+    interpolation_stats.brought += brought;
 }
 
 // Once a second while a faster frame rate is chosen: the [interp] line
@@ -7534,9 +7595,10 @@ void VulkanRenderer::Impl::report_interpolation() {
                     plain > reasons_known ? plain - reasons_known : 0u, stats.blocked, stats.over_budget);
         std::printf("[interp] guards: %u pairs moved too far on their own (%u with the same mesh drawn more than "
                     "once), own motion kept up to %.1f units; %.0f draw calls a blend followed the camera only; "
-                    "%.0f texture offsets a blend held (flipbook steps)\n",
+                    "%.0f brought back from the newer frame; %.0f texture offsets a blend held (flipbook steps)\n",
                     stats.rejected, stats.rejected_shared, static_cast<double>(stats.max_own_motion),
                     stats.blended != 0u ? static_cast<double>(stats.followed) / stats.blended : 0.0,
+                    stats.blended != 0u ? static_cast<double>(stats.brought) / stats.blended : 0.0,
                     stats.blended != 0u ? static_cast<double>(stats.flipbook_steps) / stats.blended : 0.0);
         std::fflush(stdout);
     }
