@@ -44,13 +44,14 @@ namespace {
 
 namespace net = adhoc::net;
 
-// BSD errno values, as the PSP's network stack reports them.
+// errno values, as the PSP's network stack reports them: newlib's numbering,
+// not BSD's. Its PSP errors are 0x80010000 with the errno.
 constexpr std::uint32_t kEBadF = 9u;
 constexpr std::uint32_t kEInval = 22u;
-constexpr std::uint32_t kEWouldBlock = 35u;
-constexpr std::uint32_t kEInProgress = 36u;
-constexpr std::uint32_t kENotConn = 57u;
-constexpr std::uint32_t kETimedOut = 60u;
+constexpr std::uint32_t kEWouldBlock = 11u;
+constexpr std::uint32_t kEInProgress = 119u;
+constexpr std::uint32_t kENotConn = 128u;
+constexpr std::uint32_t kETimedOut = 116u;
 
 // The error ranges of the libraries; exact values are not documented.
 constexpr std::uint32_t kResolverFailed = 0x80410408u;
@@ -89,7 +90,7 @@ std::string describe(const AllegrexContext &ctx, unsigned count) {
 void done(AllegrexContext &ctx, const char *name, unsigned argc, std::uint32_t result, const std::string &note = {}) {
     if (tracing())
         trace(std::string(name) + "(" + describe(ctx, argc) + ") = " + psprecomp::hex32(result) +
-              (note.empty() ? "" : " " + note));
+              (note.empty() ? "" : " " + note) + " ra=" + psprecomp::hex32(ctx.gpr[31]));
     kernel().finish(ctx, result);
 }
 
@@ -103,42 +104,50 @@ std::string rewrite_url(const std::string &url) {
     return hook != nullptr ? hook(url) : url;
 }
 
-// Host errno (or Winsock error, which is 10000 more than the BSD value) as
-// the BSD value the PSP reports.
+// Host errno, or Winsock error, as the errno the PSP reports.
 std::uint32_t psp_errno(int error) {
 #if defined(_WIN32)
-    if (error >= 10000) return static_cast<std::uint32_t>(error - 10000);
-    return static_cast<std::uint32_t>(error);
+#define PSP_NET_E(name) WSA##name
 #else
-    switch (error) {
-    case EAGAIN: return kEWouldBlock;
-    case EINPROGRESS: return kEInProgress;
-    case EALREADY: return 37u;
-    case ENOTSOCK: return 38u;
-    case EDESTADDRREQ: return 39u;
-    case EMSGSIZE: return 40u;
-    case EPROTOTYPE: return 41u;
-    case ENOPROTOOPT: return 42u;
-    case EPROTONOSUPPORT: return 43u;
-    case EOPNOTSUPP: return 45u;
-    case EAFNOSUPPORT: return 47u;
-    case EADDRINUSE: return 48u;
-    case EADDRNOTAVAIL: return 49u;
-    case ENETDOWN: return 50u;
-    case ENETUNREACH: return 51u;
-    case ENETRESET: return 52u;
-    case ECONNABORTED: return 53u;
-    case ECONNRESET: return 54u;
-    case ENOBUFS: return 55u;
-    case EISCONN: return 56u;
-    case ENOTCONN: return kENotConn;
-    case ETIMEDOUT: return kETimedOut;
-    case ECONNREFUSED: return 61u;
-    case EHOSTDOWN: return 64u;
-    case EHOSTUNREACH: return 65u;
-    default: return static_cast<std::uint32_t>(error);  // EBADF, EINVAL, EPIPE... agree
-    }
+#define PSP_NET_E(name) name
 #endif
+    switch (error) {
+    case PSP_NET_E(EWOULDBLOCK): return kEWouldBlock;
+    case PSP_NET_E(EINPROGRESS): return kEInProgress;
+    case PSP_NET_E(EALREADY): return 120u;
+    case PSP_NET_E(ENOTSOCK): return 108u;
+    case PSP_NET_E(EDESTADDRREQ): return 121u;
+    case PSP_NET_E(EMSGSIZE): return 122u;
+    case PSP_NET_E(EPROTOTYPE): return 107u;
+    case PSP_NET_E(ENOPROTOOPT): return 109u;
+    case PSP_NET_E(EPROTONOSUPPORT): return 123u;
+    case PSP_NET_E(EOPNOTSUPP): return 95u;
+    case PSP_NET_E(EAFNOSUPPORT): return 106u;
+    case PSP_NET_E(EADDRINUSE): return 112u;
+    case PSP_NET_E(EADDRNOTAVAIL): return 125u;
+    case PSP_NET_E(ENETDOWN): return 115u;
+    case PSP_NET_E(ENETUNREACH): return 114u;
+    case PSP_NET_E(ENETRESET): return 126u;
+    case PSP_NET_E(ECONNABORTED): return 113u;
+    case PSP_NET_E(ECONNRESET): return 104u;
+    case PSP_NET_E(ENOBUFS): return 105u;
+    case PSP_NET_E(EISCONN): return 127u;
+    case PSP_NET_E(ENOTCONN): return kENotConn;
+    case PSP_NET_E(ESHUTDOWN): return 110u;
+    case PSP_NET_E(ETIMEDOUT): return kETimedOut;
+    case PSP_NET_E(ECONNREFUSED): return 111u;
+    case PSP_NET_E(EHOSTDOWN): return 117u;
+    case PSP_NET_E(EHOSTUNREACH): return 118u;
+#if defined(_WIN32)
+    case WSAEBADF: return kEBadF;
+    case WSAEINVAL: return kEInval;
+    case WSAEINTR: return 4u;
+    case WSAEACCES: return 13u;
+    case WSAEFAULT: return 14u;
+#endif
+    default: return static_cast<std::uint32_t>(error);  // EINTR, EBADF, EINVAL, EPIPE... agree
+    }
+#undef PSP_NET_E
 }
 
 // --- State ---------------------------------------------------------------
@@ -811,6 +820,7 @@ void register_net_infra(HleRegistrar &hle) {
         Socket *s = find_socket(id);
         const auto to = guest_address(rt.memory(), arg(ctx, 4));
         if (s == nullptr) return done(ctx, "sceNetInetSendto", 6, 0xFFFFFFFFu);
+        if (to) trace("sendto " + to->describe());
         run_socket_call(ctx, "sceNetInetSendto", 6, s->nonblocking || (flags & 0x80u) != 0u, s->send_timeout_us,
                         [&rt, id, data, length, flags, to]() -> std::optional<std::uint32_t> {
                             Socket *s = find_socket(id);
@@ -1001,7 +1011,7 @@ void register_net_infra(HleRegistrar &hle) {
         kernel().finish(ctx, state().errno_value);
     });
     hle.add("sceNetInet", "sceNetInetGetPspError", [](Runtime &, AllegrexContext &ctx) {
-        kernel().finish(ctx, state().errno_value == 0u ? 0u : 0x80410000u | state().errno_value);
+        kernel().finish(ctx, state().errno_value == 0u ? 0u : 0x80010000u | state().errno_value);
     });
     // (dotted address, in_addr out): 1 if it is one.
     hle.add("sceNetInet", "sceNetInetInetAton", [](Runtime &rt, AllegrexContext &ctx) {
