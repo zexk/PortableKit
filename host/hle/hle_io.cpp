@@ -29,7 +29,9 @@ namespace {
 
 namespace io_error {
 constexpr std::uint32_t kFileNotFound = 0x80010002u;
-constexpr std::uint32_t kBadFileDescriptor = 0x80010009u;
+// A handle that is not open: the kernel's SCE_KERNEL_ERROR_BADF, not the file
+// system's EBADF (0x80010009), as a PSP and PPSSPP answer.
+constexpr std::uint32_t kBadFileDescriptor = 0x80020323u;
 constexpr std::uint32_t kDeviceNotFound = 0x80010013u;
 constexpr std::uint32_t kInvalidArgument = 0x80010016u;
 constexpr std::uint32_t kReadOnly = 0x8001001Eu;
@@ -507,11 +509,11 @@ void complete_async(OpenFile &file, std::int64_t result) {
 // it is replaced, as PPSSPP does. Metal Gear Solid Portable Ops' file system
 // module issues its next sceIoReadAsync before its reader thread collects the
 // last one, and retries a busy read forever.
-OpenFile *async_handle(std::uint32_t fd, std::uint32_t &error) {
+OpenFile *async_handle(std::uint32_t fd, std::uint32_t &error, const char *call) {
     const auto found = io().files.find(fd);
     if (found == io().files.end()) {
         error = io_error::kBadFileDescriptor;
-        if (trace_io()) std::cerr << "[io] async call on unknown fd=" << fd << "\n";
+        if (trace_io()) std::cerr << "[io] async " << call << " on unknown fd=" << fd << "\n";
         return nullptr;
     }
     if (found->second.release_after_async) {
@@ -619,7 +621,7 @@ std::uint32_t ioctl_op(Runtime &rt, AllegrexContext &ctx) {
 void register_async_io(HleRegistrar &hle) {
     hle.add("IoFileMgrForUser", "sceIoIoctlAsync", [](Runtime &rt, AllegrexContext &ctx) {
         std::uint32_t error = 0u;
-        OpenFile *file = async_handle(arg(ctx, 0), error);
+        OpenFile *file = async_handle(arg(ctx, 0), error, "Ioctl");
         if (file == nullptr) {
             kernel().finish(ctx, error);
             return;
@@ -653,7 +655,7 @@ void register_async_io(HleRegistrar &hle) {
     });
     hle.add("IoFileMgrForUser", "sceIoCloseAsync", [](Runtime &, AllegrexContext &ctx) {
         std::uint32_t error = 0u;
-        OpenFile *file = async_handle(arg(ctx, 0), error);
+        OpenFile *file = async_handle(arg(ctx, 0), error, "Close");
         if (file == nullptr) {
             kernel().finish(ctx, error);
             return;
@@ -667,8 +669,11 @@ void register_async_io(HleRegistrar &hle) {
     });
     hle.add("IoFileMgrForUser", "sceIoReadAsync", [](Runtime &rt, AllegrexContext &ctx) {
         std::uint32_t error = 0u;
-        OpenFile *file = async_handle(arg(ctx, 0), error);
+        OpenFile *file = async_handle(arg(ctx, 0), error, "Read");
         if (file == nullptr) {
+            if (trace_io())
+                std::cerr << "[io] read async on bad fd ra=" << psprecomp::hex32(ctx.gpr[31]) << " size=" << arg(ctx, 2)
+                          << "\n";
             kernel().finish(ctx, error);
             return;
         }
@@ -678,7 +683,7 @@ void register_async_io(HleRegistrar &hle) {
     });
     hle.add("IoFileMgrForUser", "sceIoWriteAsync", [](Runtime &rt, AllegrexContext &ctx) {
         std::uint32_t error = 0u;
-        OpenFile *file = async_handle(arg(ctx, 0), error);
+        OpenFile *file = async_handle(arg(ctx, 0), error, "Write");
         if (file == nullptr) {
             kernel().finish(ctx, error);
             return;
@@ -690,7 +695,7 @@ void register_async_io(HleRegistrar &hle) {
     // sceIoLseekAsync(fd, SceOff offset, whence): offset in a2:a3, whence in t0.
     hle.add("IoFileMgrForUser", "sceIoLseekAsync", [](Runtime &, AllegrexContext &ctx) {
         std::uint32_t error = 0u;
-        OpenFile *file = async_handle(arg(ctx, 0), error);
+        OpenFile *file = async_handle(arg(ctx, 0), error, "Lseek");
         if (file == nullptr) {
             kernel().finish(ctx, error);
             return;
@@ -703,7 +708,7 @@ void register_async_io(HleRegistrar &hle) {
     });
     hle.add("IoFileMgrForUser", "sceIoLseek32Async", [](Runtime &, AllegrexContext &ctx) {
         std::uint32_t error = 0u;
-        OpenFile *file = async_handle(arg(ctx, 0), error);
+        OpenFile *file = async_handle(arg(ctx, 0), error, "Lseek32");
         if (file == nullptr) {
             kernel().finish(ctx, error);
             return;
