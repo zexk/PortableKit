@@ -71,7 +71,7 @@ Written from documentation; each logs `UNVERIFIED` on its first call.
 | sceNetResolver | `StartNtoA` resolves through the host, after the profile's `infrastructure_host` |
 | sceNetInet | sockets are host sockets: TCP and UDP, blocking and non-blocking, `select`, socket options, `InetAton` |
 | sceHttp, sceHttps | requests are made from the host over HTTP/1.1, after the profile's `infrastructure_url`; cookies, redirects and chunked bodies are handled. HTTPS is not spoken |
-| sceParseUri | `UriParse` and `UriBuild` |
+| sceParseUri | `UriParse`, `UriBuild` and `UriEscape` |
 | sceWlanDrv | the wireless switch is on while infrastructure networking is |
 
 ## Offline fallback
