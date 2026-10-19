@@ -38,6 +38,9 @@ void set_runtime_thread_identity(std::int32_t uid, const std::string &name) noex
 [[nodiscard]] std::int32_t runtime_thread_uid() noexcept;
 [[nodiscard]] const char *runtime_thread_name() noexcept;
 [[nodiscard]] std::uint32_t runtime_dispatch_pc() noexcept;
+// The interpreter names each instruction it runs, so a write watch hit in
+// interpreted code points at the store itself rather than where dispatch entered.
+void set_runtime_dispatch_pc(std::uint32_t pc) noexcept;
 [[nodiscard]] RuntimeExecutionContextToken capture_runtime_execution_context() noexcept;
 [[nodiscard]] bool runtime_execution_context_matches(RuntimeExecutionContextToken token) noexcept;
 // Hot direct-chain guard.  The generation increments on every PSP thread
@@ -74,6 +77,11 @@ public:
     // an AOT build keeps the wrapper its own code registered.
     bool register_import_stub(std::uint32_t address, std::string library, std::uint32_t nid);
     [[nodiscard]] bool has_function(std::uint32_t address) const;
+    // What is registered at an address now, or null: a profile that wraps a
+    // guest function takes the original here before registering its wrapper.
+    [[nodiscard]] RecompiledFunction registered_function(std::uint32_t address) const noexcept {
+        return lookup_function(address);
+    }
     [[nodiscard]] std::size_t function_count() const noexcept;
 
     void set_game_root(std::filesystem::path root);
