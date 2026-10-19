@@ -871,14 +871,14 @@ void Menu::controls() {
             settings::save();
         }
         o = options_for("input.mouse_sensitivity",
-                        "Degrees the camera turns for each count of mouse motion. While a bow or a bowgun aims, "
-                        "the mouse is slowed as Aim speed is to Camera speed.");
+                        "How far the camera turns for mouse motion: 1.0x turns it 0.1 degrees a count. While a "
+                        "bow or a bowgun aims, the mouse is slowed as Aim speed is to Camera speed.");
         if (!s.mouse && !o.disabled) {
             o.disabled = true;
             o.note = "Mouse is off";
         }
         int sensitivity = static_cast<int>(std::lround(s.mouse_sensitivity * 100.0f));
-        if (slider_row("Mouse sensitivity", sensitivity, 1, 99, 1, "0.%02d deg", o)) {
+        if (slider_row("Mouse sensitivity", sensitivity, 1, 99, 1, "%.1fx", o, 0.1)) {
             s.mouse_sensitivity = static_cast<float>(sensitivity) / 100.0f;
             settings::save();
         }

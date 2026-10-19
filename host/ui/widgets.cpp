@@ -425,7 +425,7 @@ bool toggle_row(const char *label, bool value, const RowOptions &options) {
 }
 
 bool slider_row(const char *label, int &value, int minimum, int maximum, int step, const char *format,
-                const RowOptions &options) {
+                const RowOptions &options, double shown_per_unit) {
     const Row r = row(label, options);
     const int before = value;
     ImDrawList *draw = ImGui::GetWindowDrawList();
@@ -461,7 +461,10 @@ bool slider_row(const char *label, int &value, int minimum, int maximum, int ste
     draw->AddCircleFilled({bar_min.x + bar_width * t, mid_y}, font() * (live ? 0.42f : 0.34f),
                           options.disabled ? colors::kTextDisabled : live ? colors::kAccentBright : colors::kText);
     char text[32];
-    std::snprintf(text, sizeof(text), format, value);
+    if (shown_per_unit != 0.0)
+        std::snprintf(text, sizeof(text), format, value * shown_per_unit);
+    else
+        std::snprintf(text, sizeof(text), format, value);
     draw_value(r, text, options, px(16.0f) + bar_width + font() * 1.0f,
                live ? colors::kAccentBright : colors::kText);
     return value != before;
