@@ -42,6 +42,9 @@ private:
     std::ifstream file_;
     std::uint64_t size_bytes_{};
     std::map<std::string, Entry> entries_;
+    // Each directory's entries in the order its records are on the disc,
+    // which is the order a PSP lists them in.
+    std::map<std::string, std::vector<std::string>> children_;
 };
 
 } // namespace portablekit
