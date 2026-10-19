@@ -91,10 +91,11 @@ struct OpenFile {
     std::uint64_t unfiltered_size{};
     // Asynchronous calls (sceIo*Async): the result of the one operation in
     // flight, kept until sceIoWaitAsync or sceIoPollAsync collects it. The
-    // operation itself has already run: the files are the host's, and a
-    // read from them is done by the time a game could look. A handle whose
-    // asynchronous open failed, or that sceIoCloseAsync closed, lives until
-    // its result is collected, and no longer.
+    // operation itself has already run, but a read from the disc counts as
+    // finished only once a UMD drive would have transferred it
+    // (async_ready_us). A handle whose asynchronous open failed, or that
+    // sceIoCloseAsync closed, lives until its result is collected, and no
+    // longer.
     // A directory's entries, read at sceIoDopen and handed out one at a time
     // by sceIoDread.
     struct DirectoryEntry {
@@ -106,6 +107,7 @@ struct OpenFile {
     std::vector<DirectoryEntry> entries;
     std::size_t next_entry{};
     std::optional<std::int64_t> async_result;
+    std::uint64_t async_ready_us{};
     bool release_after_async{};
     SceUID async_callback{};
     std::uint32_t async_callback_argument{};
@@ -496,10 +498,22 @@ constexpr std::uint32_t kBusy = 0x80020329u;     // SCE_KERNEL_ERROR_ASYNC_BUSY
 constexpr std::uint32_t kNoAsync = 0x8002032Au;  // SCE_KERNEL_ERROR_NOASYNC
 } // namespace async_error
 
+// A disc read of `bytes` finishes this long after it starts: the drive's
+// transfer rate, roughly 4 MB/s. A game may watch a long read run: Metal Gear
+// Solid Portable Ops' file system module reports itself busy while one does,
+// and its comic pages start their sound in that time; with reads done at once
+// the next page's loader overtook them. <prefix>_INSTANT_ASYNC_IO=1 finishes
+// every read at once instead.
+std::uint64_t disc_transfer_us(std::uint64_t bytes) {
+    static const bool instant = portablekit::env("INSTANT_ASYNC_IO") != nullptr;
+    return instant ? 0u : bytes / 4u;
+}
+
 // Records the result of an operation started on `fd` and tells the handle's
 // callback, if it has one, as a PSP does when the operation completes.
-void complete_async(OpenFile &file, std::int64_t result) {
+void complete_async(OpenFile &file, std::int64_t result, std::uint64_t transfer_us = 0u) {
     file.async_result = result;
+    file.async_ready_us = kernel().now_us() + transfer_us;
     if (file.async_callback != 0) kernel().notify_callback(file.async_callback, file.async_callback_argument);
 }
 
@@ -527,10 +541,18 @@ OpenFile *async_handle(std::uint32_t fd, std::uint32_t &error, const char *call)
 // Hands over the result of the operation in flight: the call's own v0 is 0
 // and the result goes to *result (64-bit). A handle opened or closed
 // asynchronously for nothing more goes away once its result is taken.
-std::uint32_t collect_async(Runtime &rt, std::uint32_t fd, std::uint32_t result_address) {
+// While the operation still runs, a poll answers 1 and `wait_us` says how long
+// a wait has to block for before it collects.
+std::uint32_t collect_async(Runtime &rt, std::uint32_t fd, std::uint32_t result_address, bool poll = false,
+                            std::uint64_t *wait_us = nullptr) {
     const auto found = io().files.find(fd);
     if (found == io().files.end()) return io_error::kBadFileDescriptor;
     if (!found->second.async_result) return async_error::kNoAsync;
+    const std::uint64_t now = kernel().now_us();
+    if (found->second.async_ready_us > now) {
+        if (poll) return 1u;
+        if (wait_us != nullptr) *wait_us = found->second.async_ready_us - now;
+    }
     const std::int64_t result = *found->second.async_result;
     found->second.async_result.reset();
     if (result_address != 0u) store64(rt.memory(), result_address, static_cast<std::uint64_t>(result));
@@ -678,7 +700,12 @@ void register_async_io(HleRegistrar &hle) {
             return;
         }
         const std::uint32_t result = read_file_op(rt, arg(ctx, 0), arg(ctx, 1), arg(ctx, 2));
-        complete_async(*file, static_cast<std::int32_t>(result));
+        // A count of sectors from a sector device (umd), of bytes otherwise.
+        const std::uint64_t bytes = static_cast<std::int32_t>(result) <= 0 ? 0u
+                                    : file->sector_units          ? std::uint64_t{result} * 2048u
+                                                                  : std::uint64_t{result};
+        complete_async(*file, static_cast<std::int32_t>(result),
+                       file->kind == OpenFile::Kind::Disc ? disc_transfer_us(bytes) : 0u);
         kernel().finish(ctx, 0u);
     });
     hle.add("IoFileMgrForUser", "sceIoWriteAsync", [](Runtime &rt, AllegrexContext &ctx) {
@@ -717,18 +744,22 @@ void register_async_io(HleRegistrar &hle) {
         complete_async(*file, lseek_op(arg(ctx, 0), offset, arg(ctx, 2)));
         kernel().finish(ctx, 0u);
     });
-    // Every operation has finished by the time it is asked about, so waiting
-    // and polling are the same: 0, with the result in *res. Poll answers 1
-    // only while something is in flight, which here is never.
-    const auto collect = [](Runtime &rt, AllegrexContext &ctx) {
-        kernel().finish(ctx, collect_async(rt, arg(ctx, 0), arg(ctx, 1)));
+    // 0 with the result in *res once the operation has finished. Until then a
+    // poll answers 1 and a wait blocks for the rest of the transfer.
+    const auto finish_collect = [](Runtime &rt, AllegrexContext &ctx, std::uint32_t result_address, bool poll) {
+        std::uint64_t wait_us = 0u;
+        const std::uint32_t result = collect_async(rt, arg(ctx, 0), result_address, poll, &wait_us);
+        if (wait_us != 0u) kernel().delay_current(ctx, wait_us, result);
+        else kernel().finish(ctx, result);
     };
-    hle.add("IoFileMgrForUser", "sceIoWaitAsync", collect);
-    hle.add("IoFileMgrForUser", "sceIoWaitAsyncCB", collect);
-    hle.add("IoFileMgrForUser", "sceIoPollAsync", collect);
-    // (fd, poll, res): the same whether it would wait or poll.
-    hle.add("IoFileMgrForUser", "sceIoGetAsyncStat", [](Runtime &rt, AllegrexContext &ctx) {
-        kernel().finish(ctx, collect_async(rt, arg(ctx, 0), arg(ctx, 2)));
+    const auto wait = [finish_collect](Runtime &rt, AllegrexContext &ctx) { finish_collect(rt, ctx, arg(ctx, 1), false); };
+    hle.add("IoFileMgrForUser", "sceIoWaitAsync", wait);
+    hle.add("IoFileMgrForUser", "sceIoWaitAsyncCB", wait);
+    hle.add("IoFileMgrForUser", "sceIoPollAsync",
+            [finish_collect](Runtime &rt, AllegrexContext &ctx) { finish_collect(rt, ctx, arg(ctx, 1), true); });
+    // (fd, poll, res).
+    hle.add("IoFileMgrForUser", "sceIoGetAsyncStat", [finish_collect](Runtime &rt, AllegrexContext &ctx) {
+        finish_collect(rt, ctx, arg(ctx, 2), arg(ctx, 1) != 0u);
     });
     hle.add("IoFileMgrForUser", "sceIoSetAsyncCallback", [](Runtime &, AllegrexContext &ctx) {
         const auto found = io().files.find(arg(ctx, 0));
