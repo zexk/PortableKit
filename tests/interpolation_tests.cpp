@@ -182,10 +182,34 @@ void guards() {
     mark_eligible(older, kShown);
     mark_eligible(newer, kShown);
     const Matching &swapped = matcher.match(older, newer, thresholds);
-    check(swapped.rejected == 2u && swapped.rejected_shared == 2u &&
-              swapped.newer_of[40] == Matching::kFollowCamera && swapped.newer_of[41] == Matching::kFollowCamera,
-          "swapped instances 600 units apart are not blended into each other");
+    check(swapped.rejected == 0u && swapped.newer_of[40] == 41 && swapped.newer_of[41] == 40,
+          "swapped instances pair with themselves by position");
     check(swapped.cut == nullptr, "the rest of the frame still blends");
+
+    // One instance leaves the view as another comes in: the one that stayed
+    // keeps its pair, and the other two are left alone rather than paired
+    // across the room.
+    std::vector<DrawSummary> was = scene(40u), is = scene(40u);
+    was.push_back(draw(92u, -300.0f));
+    was.push_back(draw(92u, 0.0f));
+    is.push_back(draw(92u, 0.0f));
+    is.push_back(draw(92u, 300.0f));
+    mark_eligible(was, kShown);
+    mark_eligible(is, kShown);
+    Matcher crossing;
+    const Matching &edge = crossing.match(was, is, thresholds);
+    check(edge.newer_of[40] == -1 && edge.newer_of[41] == 40 && edge.rejected == 0u,
+          "an instance leaving as another comes in is not paired with it");
+
+    // In drawing order alone they would pair with each other, and the motion
+    // guard keeps them from blending across the 600 units between them.
+    CutThresholds in_order = thresholds;
+    in_order.nearest_instances = false;
+    Matcher ordered;
+    const Matching &crossed = ordered.match(older, newer, in_order);
+    check(crossed.rejected == 2u && crossed.rejected_shared == 2u &&
+              crossed.newer_of[40] == Matching::kFollowCamera && crossed.newer_of[41] == Matching::kFollowCamera,
+          "in drawing order, swapped instances 600 units apart are not blended into each other");
 
     // A character walking 20 units a frame while the camera turns keeps its pair.
     std::vector<DrawSummary> before = scene(40u, 0.0f), after = scene(40u, 5.0f);

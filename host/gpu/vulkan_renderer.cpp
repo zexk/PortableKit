@@ -1484,6 +1484,10 @@ struct VulkanRenderer::Impl {
     struct FrameRecord {
         std::vector<interpolation::DrawSummary> summaries;
         std::vector<std::uint32_t> group_of;  // for each summary, its group
+        // For each summary of a skinned draw, where its vertices start in
+        // `skinned` (kNone for the others), so that each draw's are blended
+        // with its own partner's however the frames grouped them.
+        std::vector<std::uint32_t> skinned_of;
         std::vector<ReplayGroup> groups;
         std::vector<GpuVertex> skinned;       // skinned draws' vertices
         std::vector<ObjectBlock> objects;
@@ -1498,6 +1502,7 @@ struct VulkanRenderer::Impl {
         void clear() {
             summaries.clear();
             group_of.clear();
+            skinned_of.clear();
             groups.clear();
             skinned.clear();
             objects.clear();
@@ -2126,6 +2131,7 @@ bool VulkanRenderer::initialize(const RendererConfig &config, std::string &error
     impl.present_clock = pacing::PresentClock{};
     impl.governor = pacing::RateGovernor{};
     if (portablekit::env("INTERPOLATION_NO_MOTION_GUARD") != nullptr) impl.cut_thresholds.max_own_motion = 0.0f;
+    if (portablekit::env("INTERPOLATION_DRAW_ORDER") != nullptr) impl.cut_thresholds.nearest_instances = false;
     impl.frame_rate = player.frame_rate;
     impl.governor.set_automatic(player.frame_rate_auto);
     const std::uint32_t window_scale = std::clamp<std::uint32_t>(player.window_scale, 1u, settings::kMaxWindowScale);
@@ -7016,6 +7022,19 @@ void VulkanRenderer::Impl::record_draw_for_replay(const DrawCall &call, bool lit
     ++frame.groups.back().draws;
     frame.summaries.push_back(interpolation::summarize(call));
     frame.group_of.push_back(static_cast<std::uint32_t>(frame.groups.size() - 1u));
+    frame.skinned_of.push_back(skinned);
+    if (skinned != kNone && skinned < frame.skinned.size()) {
+        // A skinned character may be placed by its bones alone, every
+        // instance sharing one world matrix (Portable Ops' soldiers), so its
+        // origin cannot tell two apart. Its first skinned vertex can: the
+        // same point of the mesh in every frame, moving with that instance.
+        interpolation::DrawSummary &summary = frame.summaries.back();
+        const GpuVertex &first = frame.skinned[skinned];
+        const interpolation::Matrix eye = interpolation::multiply(summary.view, summary.world);
+        for (std::uint32_t row = 0; row < 3u; ++row)
+            summary.eye_translation[row] =
+                eye[row] * first.x + eye[4u + row] * first.y + eye[8u + row] * first.z + eye[12u + row];
+    }
 }
 
 // Ends the frame's recording and submits it without presenting it: with
@@ -7367,6 +7386,11 @@ void VulkanRenderer::Impl::replay(VkCommandBuffer commands, std::uint32_t slot, 
     // leaves draws without a partner where the older frame drew them.
     static const bool flipbook_guard = portablekit::env("INTERPOLATION_NO_FLIPBOOK_GUARD") == nullptr;
     static const bool motion_guard = portablekit::env("INTERPOLATION_NO_MOTION_GUARD") == nullptr;
+    // <prefix>_TRACE_INTERPOLATION=unpaired: each solid draw only the newer frame has.
+    static const bool trace_unpaired = [] {
+        const char *text = portablekit::env("TRACE_INTERPOLATION");
+        return text != nullptr && std::strcmp(text, "unpaired") == 0;
+    }();
 
     const auto emit = [&](const ReplayGroup &drawn, const DrawState &state, VkDeviceSize vertex_base) {
         if (!known || std::memcmp(&state.viewport, &set.viewport, sizeof(VkViewport)) != 0)
@@ -7433,14 +7457,22 @@ void VulkanRenderer::Impl::replay(VkCommandBuffer commands, std::uint32_t slot, 
             const interpolation::DrawSummary &to = newer.summaries[drawn.first_draw];
             // Only what the older frame could not have shown: its origin, where
             // the older camera saw it, lies off that frame's screen or near its
-            // edge (an object coming in may have its origin in view before its
-            // bounds were). Something well in view the game simply did not draw
+            // edge, within CutThresholds::bring_edge of the centre (an object
+            // coming in may have its origin in view before its bounds were). Something well in view the game simply did not draw
             // then (a blinking marker) is left as the older frame had it.
             const interpolation::Matrix was = interpolation::multiply(
                 camera_motion.inverse, interpolation::multiply(to.view, to.world));
             const interpolation::Matrix clip = interpolation::multiply(to.projection, was);
             const float w = clip[15];
-            if (w > 0.0f && std::fabs(clip[12]) <= 0.75f * w && std::fabs(clip[13]) <= 0.75f * w) continue;
+            const float edge = cut_thresholds.bring_edge * w;
+            const bool inside = w > 0.0f && std::fabs(clip[12]) <= edge && std::fabs(clip[13]) <= edge;
+            if (trace_unpaired)
+                std::printf("[interp] newer only %s: vertices %08x texture %08x count %u indices %08x type %08x, at the older "
+                            "camera x %+.2f y %+.2f w %.1f\n",
+                            inside ? "left out" : "brought", to.vertex_address, to.texture_address, to.count,
+                            to.index_address, to.vertex_type,
+                            w != 0.0f ? clip[12] / w : 0.0f, w != 0.0f ? clip[13] / w : 0.0f, w);
+            if (inside) continue;
             const interpolation::Matrix eye = interpolation::multiply(back, interpolation::multiply(to.view, to.world));
             DrawState state = drawn.state;
             state.push.transform = interpolation::multiply(to.projection, eye);
@@ -7473,6 +7505,9 @@ void VulkanRenderer::Impl::replay(VkCommandBuffer commands, std::uint32_t slot, 
             // it would stand still on screen while the scene turns, and jump
             // back at the next frame.
             const interpolation::DrawSummary &from = older.summaries[drawn.first_draw];
+            if (trace_unpaired)
+                std::printf("[interp] older only: vertices %08x texture %08x count %u indices %08x type %08x\n",
+                            from.vertex_address, from.texture_address, from.count, from.index_address, from.vertex_type);
             const interpolation::Matrix eye = interpolation::multiply(
                 interpolation::rigid_at(camera_motion, t), interpolation::multiply(from.view, from.world));
             state.push.transform = interpolation::multiply(from.projection, eye);
@@ -7569,23 +7604,52 @@ void VulkanRenderer::Impl::replay(VkCommandBuffer commands, std::uint32_t slot, 
                 }
             }
             // Skinning is linear in the bone matrices, so blending the skinned
-            // vertices blends the bones.
-            if (drawn.skinned != kNone && next.skinned != kNone && next.vertex_count == drawn.vertex_count) {
+            // vertices blends the bones. Each draw's are blended with its own
+            // partner's: the game joins a character's skinned draws into one
+            // group in one frame and not in the next, and blending only
+            // groups of the same size left the character's arm and weapon at
+            // the older frame's pose in those frames.
+            if (drawn.skinned != kNone) {
                 const VkDeviceSize at = (scratch_at + 15u) & ~VkDeviceSize{15u};
                 const VkDeviceSize bytes = static_cast<VkDeviceSize>(drawn.vertex_count) * sizeof(GpuVertex);
                 if (at + bytes <= scratch_end) {
-                    const GpuVertex *a = older.skinned.data() + drawn.skinned;
-                    const GpuVertex *b = newer.skinned.data() + next.skinned;
                     auto *out = reinterpret_cast<GpuVertex *>(mapped + at);
-                    for (std::uint32_t v = 0; v < drawn.vertex_count; ++v) {
-                        GpuVertex blended = a[v];
-                        blended.x += (b[v].x - blended.x) * t;
-                        blended.y += (b[v].y - blended.y) * t;
-                        blended.z += (b[v].z - blended.z) * t;
-                        blended.nx += (b[v].nx - blended.nx) * t;
-                        blended.ny += (b[v].ny - blended.ny) * t;
-                        blended.nz += (b[v].nz - blended.nz) * t;
-                        out[v] = blended;
+                    const GpuVertex *a = older.skinned.data() + drawn.skinned;
+                    std::memcpy(out, a, static_cast<std::size_t>(bytes));
+                    const std::uint32_t last = drawn.first_draw + drawn.draws;
+                    for (std::uint32_t i = drawn.first_draw; i < last; ++i) {
+                        const std::int32_t mate = matching.newer_of[i];
+                        if (mate < 0) continue;
+                        const std::uint32_t from_start = older.skinned_of[i];
+                        const std::uint32_t to_start = newer.skinned_of[static_cast<std::size_t>(mate)];
+                        if (from_start == kNone || to_start == kNone) continue;
+                        // Each draw's vertices run to the next draw's start,
+                        // or to the end of its group.
+                        const std::uint32_t from_end =
+                            i + 1u < last ? older.skinned_of[i + 1u] : drawn.skinned + drawn.vertex_count;
+                        const std::uint32_t to_next = static_cast<std::uint32_t>(mate) + 1u;
+                        const ReplayGroup &to_group = newer.groups[newer.group_of[static_cast<std::size_t>(mate)]];
+                        const std::uint32_t to_end = to_next < to_group.first_draw + to_group.draws
+                                                         ? newer.skinned_of[to_next]
+                                                         : to_group.skinned + to_group.vertex_count;
+                        if (from_end == kNone || to_end == kNone || to_group.skinned == kNone ||
+                            from_end - from_start != to_end - to_start)
+                            continue;
+                        // Read from the records, never back from `out`: mapped
+                        // memory is slow to read.
+                        const GpuVertex *f = older.skinned.data() + from_start;
+                        const GpuVertex *b = newer.skinned.data() + to_start;
+                        GpuVertex *o = out + (from_start - drawn.skinned);
+                        for (std::uint32_t v = 0; v < from_end - from_start; ++v) {
+                            GpuVertex blended = f[v];
+                            blended.x += (b[v].x - blended.x) * t;
+                            blended.y += (b[v].y - blended.y) * t;
+                            blended.z += (b[v].z - blended.z) * t;
+                            blended.nx += (b[v].nx - blended.nx) * t;
+                            blended.ny += (b[v].ny - blended.ny) * t;
+                            blended.nz += (b[v].nz - blended.nz) * t;
+                            o[v] = blended;
+                        }
                     }
                     scratch_at = at + bytes;
                     vertex_base = at;

@@ -165,6 +165,77 @@ const Matching &Matcher::match(const std::vector<DrawSummary> &older, const std:
                                         out.camera[14] * out.camera[14]);
     }
 
+    // Instances of one mesh were paired in drawing order, which the game
+    // changes when it reorders its actors, and which pairs the wrong ones
+    // when one leaves the view as another comes in: guards at the edge of
+    // the screen blended into each other, or were drawn twice. With the
+    // camera's motion known, each key's instances are paired closest first,
+    // by how far each newer one is from where that motion puts each older
+    // one; a pair further apart than max_own_motion is not made, so what
+    // left and what came in are each handled alone.
+    if (out.camera_found && thresholds.nearest_instances) {
+        const Matrix &c = out.camera;
+        const float limit = thresholds.max_own_motion * thresholds.max_own_motion;
+        instances_.clear();
+        for (std::size_t i = 0; i < older.size(); ++i) {
+            if (!older[i].eligible) continue;
+            const Slot &slot = slot_for(key_of(older[i]), older[i]);
+            if (slot.first < 0) continue;
+            instances_.emplace_back(static_cast<std::size_t>(&slot - slots_.data()), static_cast<std::int32_t>(i));
+        }
+        std::sort(instances_.begin(), instances_.end());
+        taken_.assign(newer.size(), 0u);
+        for (std::size_t run = 0; run < instances_.size();) {
+            const std::size_t slot = instances_[run].first;
+            std::size_t end = run;
+            while (end < instances_.size() && instances_[end].first == slot) ++end;
+            const Slot &chain = slots_[slot];
+            const std::size_t olders = end - run;
+            std::size_t newers = 0u;
+            for (std::int32_t n = chain.first; n >= 0; n = next_[static_cast<std::size_t>(n)]) ++newers;
+            // Unique meshes keep their pair; a mesh drawn hundreds of times
+            // (grass, say) keeps drawing order rather than cost a frame.
+            if ((olders == 1u && newers == 1u) || olders * newers > 16384u) {
+                run = end;
+                continue;
+            }
+            candidates_.clear();
+            for (std::size_t k = run; k < end; ++k) {
+                const DrawSummary &from = older[static_cast<std::size_t>(instances_[k].second)];
+                const std::array<float, 3> before = from.prepared ? from.eye_translation : eye_translation_of(from);
+                std::array<float, 3> predicted{};
+                for (std::size_t row = 0; row < 3u; ++row)
+                    predicted[row] =
+                        c[row] * before[0] + c[4u + row] * before[1] + c[8u + row] * before[2] + c[12u + row];
+                for (std::int32_t n = chain.first; n >= 0; n = next_[static_cast<std::size_t>(n)]) {
+                    const DrawSummary &to = newer[static_cast<std::size_t>(n)];
+                    const std::array<float, 3> after = to.prepared ? to.eye_translation : eye_translation_of(to);
+                    float distance = 0.0f;
+                    for (std::size_t row = 0; row < 3u; ++row)
+                        distance += (after[row] - predicted[row]) * (after[row] - predicted[row]);
+                    if (limit > 0.0f && distance > limit) continue;
+                    candidates_.push_back({distance, static_cast<std::int32_t>(k), n});
+                }
+            }
+            std::sort(candidates_.begin(), candidates_.end(),
+                      [](const Candidate &a, const Candidate &b) { return a.distance < b.distance; });
+            for (std::size_t k = run; k < end; ++k) {
+                std::int32_t &partner = out.newer_of[static_cast<std::size_t>(instances_[k].second)];
+                if (partner >= 0) --out.matched;
+                partner = -1;
+            }
+            for (const Candidate &pair : candidates_) {
+                std::int32_t &partner =
+                    out.newer_of[static_cast<std::size_t>(instances_[static_cast<std::size_t>(pair.older)].second)];
+                if (partner >= 0 || taken_[static_cast<std::size_t>(pair.newer)] != 0u) continue;
+                partner = pair.newer;
+                taken_[static_cast<std::size_t>(pair.newer)] = 1u;
+                ++out.matched;
+            }
+            run = end;
+        }
+    }
+
     // Each pair's own motion: where the camera's motion would have taken the
     // older draw against where the newer one is, in eye space.
     if (out.camera_found && thresholds.max_own_motion > 0.0f) {

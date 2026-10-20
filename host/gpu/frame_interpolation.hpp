@@ -124,6 +124,18 @@ struct CutThresholds {
     // pair up in drawing order, and that order can change. 0 turns the
     // guard off (<prefix>_INTERPOLATION_NO_MOTION_GUARD).
     float max_own_motion{120.0f};
+    // Once the camera's motion is known, instances of one mesh are paired
+    // by where they are instead of by drawing order: the nearest to where
+    // the camera's motion puts each. Off (<prefix>_INTERPOLATION_DRAW_ORDER),
+    // drawing order alone.
+    bool nearest_instances{true};
+    // A solid draw only the newer frame has is brought into the frames in
+    // between when its origin, as the older camera saw it, lies further from
+    // the centre than this, in normalized device coordinates: further out it
+    // can be coming into view. A game whose cull keeps anything with its
+    // origin on screen sets 1, so that a draw only one frame has on screen
+    // (another level of detail of something both drew) is not shown twice.
+    float bring_edge{0.75f};
     // Blend draws with an orthographic projection too. A 2D game drawn with
     // transformed vertices (Purun) has nothing else to blend; off, only
     // perspective draws are, which keeps a 3D game's 2D interface as it is.
@@ -173,6 +185,14 @@ private:
     std::vector<Slot> slots_;
     std::vector<std::int32_t> next_;  // for each newer draw, the next with its key
     std::vector<std::uint8_t> shared_;  // for each older draw: its key had several newer draws
+    std::vector<std::pair<std::size_t, std::int32_t>> instances_;  // (slot, older draw), by slot
+    struct Candidate {
+        float distance;       // squared, from where the camera's motion puts the older one
+        std::int32_t older;   // into instances_
+        std::int32_t newer;
+    };
+    std::vector<Candidate> candidates_;
+    std::vector<std::uint8_t> taken_;   // for each newer draw: already paired by position
     Matching result_;
     // The previous pair's camera motion, when that pair was blended.
     bool previous_blended_{};
