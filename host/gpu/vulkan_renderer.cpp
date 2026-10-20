@@ -5905,8 +5905,42 @@ void VulkanRenderer::submit(const DrawCall &call, const GuestMemory &memory) {
                 push_vertex(vertex_at(i + 1u));
             }
             break;
-        case PrimitiveType::Sprites:
-            // Vertex pairs describe the opposite corners of a rectangle.
+        case PrimitiveType::Sprites: {
+            // Vertex pairs describe the opposite corners of a rectangle. In
+            // transform mode the GE projects both corners and fills the
+            // rectangle between them on screen, which keeps the marks over
+            // characters facing the camera. So the other two corners go where
+            // the picture has them, at the second corner's eye depth, taken
+            // back into object space for the vertex shader.
+            // <prefix>_OBJECT_SPACE_SPRITES makes the rectangle in object
+            // space, as before.
+            static const bool object_space_sprites = portablekit::env("OBJECT_SPACE_SPRITES") != nullptr;
+            const interpolation::Matrix eye_from_object = multiply(call.view, call.world);
+            interpolation::Matrix object_from_eye{};
+            const bool on_screen = !call.through && !object_space_sprites &&
+                                   interpolation::affine_inverse(eye_from_object, object_from_eye);
+            const auto apply = [](const interpolation::Matrix &m, const std::array<float, 4> &v) {
+                std::array<float, 4> out{};
+                for (std::uint32_t row = 0; row < 4u; ++row)
+                    out[row] = m[row] * v[0] + m[4u + row] * v[1] + m[8u + row] * v[2] + m[12u + row];
+                return out;
+            };
+            const interpolation::Matrix &p = call.projection;
+            // Moves `v` to the point at eye depth `z` that the picture shows
+            // at (x, y), in normalized device coordinates.
+            const auto place = [&](Vertex &v, float x, float y, float z) {
+                const float cx = p[8] * z + p[12], cy = p[9] * z + p[13], cw = p[11] * z + p[15];
+                const float a11 = p[0] - x * p[3], a12 = p[4] - x * p[7], r1 = x * cw - cx;
+                const float a21 = p[1] - y * p[3], a22 = p[5] - y * p[7], r2 = y * cw - cy;
+                const float det = a11 * a22 - a12 * a21;
+                if (std::fabs(det) < 1e-12f) return false;
+                const auto object =
+                    apply(object_from_eye, {(r1 * a22 - a12 * r2) / det, (a11 * r2 - r1 * a21) / det, z, 1.0f});
+                v.position[0] = object[0];
+                v.position[1] = object[1];
+                v.position[2] = object[2];
+                return true;
+            };
             for (std::size_t i = 0; i + 1u < count; i += 2u) {
                 Vertex a = vertex_at(i);
                 const Vertex &b = vertex_at(i + 1u);
@@ -5922,6 +5956,23 @@ void VulkanRenderer::submit(const DrawCall &call, const GuestMemory &memory) {
                 Vertex bottom_left = a;
                 bottom_left.position[1] = b.position[1];
                 bottom_left.texcoord[1] = b.texcoord[1];
+                if (on_screen) {
+                    const auto eye_a = apply(eye_from_object, vertex_at(i).position);
+                    const auto eye_b = apply(eye_from_object, b.position);
+                    const auto clip_a = apply(p, eye_a);
+                    const auto clip_b = apply(p, eye_b);
+                    if (clip_a[3] > 0.0f && clip_b[3] > 0.0f) {
+                        const float ax = clip_a[0] / clip_a[3], ay = clip_a[1] / clip_a[3];
+                        const float bx = clip_b[0] / clip_b[3], by = clip_b[1] / clip_b[3];
+                        Vertex placed_a = a, placed_top_right = top_right, placed_bottom_left = bottom_left;
+                        if (place(placed_a, ax, ay, eye_b[2]) && place(placed_top_right, bx, ay, eye_b[2]) &&
+                            place(placed_bottom_left, ax, by, eye_b[2])) {
+                            a = placed_a;
+                            top_right = placed_top_right;
+                            bottom_left = placed_bottom_left;
+                        }
+                    }
+                }
                 push_vertex(a);
                 push_vertex(top_right);
                 push_vertex(b);
@@ -5930,6 +5981,7 @@ void VulkanRenderer::submit(const DrawCall &call, const GuestMemory &memory) {
                 push_vertex(bottom_left);
             }
             break;
+        }
         default:
             return false;  // points and lines are not drawn yet
         }
