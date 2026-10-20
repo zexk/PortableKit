@@ -236,6 +236,11 @@ void matching() {
     check(replaced.matched == 40u && replaced.cut != nullptr && std::strcmp(replaced.cut, "few draws match") == 0,
           "a frame with most draws new is a cut");
 
+    Matcher turning_matcher;
+    const Matching &revealed = turning_matcher.match(scene(100u), scene(220u), thresholds);
+    check(revealed.matched == 100u && revealed.cut == nullptr,
+          "scenery coming into view, more draws than the frame before had, is not a cut");
+
     // Instances of one mesh pair up in drawing order.
     std::vector<DrawSummary> older{draw(7u, 0.0f), draw(7u, 50.0f), draw(7u, 100.0f)};
     std::vector<DrawSummary> newer{draw(7u, 1.0f), draw(7u, 51.0f)};

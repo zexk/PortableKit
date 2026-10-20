@@ -210,7 +210,10 @@ const Matching &Matcher::match(const std::vector<DrawSummary> &older, const std:
     if (out.eligible_newer == 0u || out.matched == 0u) {
         out.cut = "nothing to blend";
     } else if (static_cast<float>(out.matched) <
-               thresholds.min_matched_fraction * static_cast<float>(std::max(out.eligible_newer, out.eligible_older))) {
+               thresholds.min_matched_fraction * static_cast<float>(std::min(out.eligible_newer, out.eligible_older))) {
+        // Against the smaller frame: a turn that brings a block of scenery
+        // into view (or takes one out) doubles one side's draws in a single
+        // frame, while a new scene matches little of either.
         out.cut = "few draws match";
     } else if (out.camera_found && out.camera_angle_degrees > max_angle) {
         out.cut = "camera turned";

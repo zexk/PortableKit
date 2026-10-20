@@ -103,7 +103,7 @@ struct Matching {
 // Monster Hunter Portable 3rd, and a game on another scale replaces them
 // through GameProfile::interpolation_thresholds.
 struct CutThresholds {
-    float min_matched_fraction{0.5f};   // of the newer frame's eligible draws
+    float min_matched_fraction{0.5f};   // of the eligible draws of the frame with fewer
     float max_camera_angle_degrees{30.0f};
     float max_camera_distance{200.0f};  // world units the camera moves in one frame
     // Motion that continues the previous pair's is not a cut even past the
