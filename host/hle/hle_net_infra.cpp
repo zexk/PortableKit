@@ -81,6 +81,25 @@ void trace(const std::string &line) {
     if (tracing()) std::cerr << "[net] " << line << std::endl;
 }
 
+// <prefix>_NET_CAPTURE=<file> writes every payload the game sends or receives,
+// one line each: milliseconds since the first, the socket, '>' sent, '<'
+// received or '@' connected, the peer ('-' for a connected socket's own),
+// then the bytes in hex. Enough to study a protocol without a packet sniffer.
+void capture(std::uint32_t id, char direction, const std::string &peer, std::span<const std::uint8_t> bytes) {
+    static FILE *const file = [] {
+        const char *path = portablekit::env("NET_CAPTURE");
+        return path != nullptr && *path != '\0' ? std::fopen(path, "w") : nullptr;
+    }();
+    if (file == nullptr) return;
+    static const auto start = std::chrono::steady_clock::now();
+    const auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - start);
+    std::fprintf(file, "%lld %u %c %s ", static_cast<long long>(ms.count()), id, direction,
+                 peer.empty() ? "-" : peer.c_str());
+    for (const std::uint8_t byte : bytes) std::fprintf(file, "%02x", byte);
+    std::fputc('\n', file);
+    std::fflush(file);
+}
+
 std::string describe(const AllegrexContext &ctx, unsigned count) {
     std::ostringstream text;
     for (unsigned i = 0; i < count; ++i) text << (i != 0u ? ", " : "") << psprecomp::hex32(arg(ctx, i));
@@ -768,6 +787,7 @@ void register_net_infra(HleRegistrar &hle) {
             return done(ctx, "sceNetInetConnect", 3, 0xFFFFFFFFu);
         }
         trace("connect " + std::to_string(id) + " to " + address->describe());
+        capture(id, '@', address->describe(), {});
         if (::connect(s->host, reinterpret_cast<const sockaddr *>(&address->storage), address->length) == 0)
             return done(ctx, "sceNetInetConnect", 3, 0u);
         const int error = net::socket_error();
@@ -811,6 +831,7 @@ void register_net_infra(HleRegistrar &hle) {
                             const auto n = ::send(s->host, reinterpret_cast<const char *>(bytes.data()),
                                                   static_cast<int>(length), host_flags(flags) | net::kSendFlags);
                             if (n < 0) return failed_or_blocked();
+                            capture(id, '>', {}, std::span(bytes.data(), static_cast<std::size_t>(n)));
                             return static_cast<std::uint32_t>(n);
                         });
     });
@@ -833,6 +854,8 @@ void register_net_infra(HleRegistrar &hle) {
                                 host_flags(flags) | net::kSendFlags,
                                 to ? reinterpret_cast<const sockaddr *>(&to->storage) : nullptr, to ? to->length : 0);
                             if (n < 0) return failed_or_blocked();
+                            capture(id, '>', to ? to->describe() : std::string{},
+                                    std::span(bytes.data(), static_cast<std::size_t>(n)));
                             return static_cast<std::uint32_t>(n);
                         });
     });
@@ -850,6 +873,7 @@ void register_net_infra(HleRegistrar &hle) {
                             const auto n = ::recv(s->host, reinterpret_cast<char *>(bytes.data()),
                                                   static_cast<int>(length), host_flags(flags));
                             if (n < 0) return failed_or_blocked();
+                            capture(id, '<', {}, std::span(bytes.data(), static_cast<std::size_t>(n)));
                             rt.memory().copy_in(buffer, std::span(bytes.data(), static_cast<std::size_t>(n)));
                             return static_cast<std::uint32_t>(n);
                         });
@@ -872,6 +896,10 @@ void register_net_infra(HleRegistrar &hle) {
                                                       static_cast<int>(length), host_flags(flags),
                                                       reinterpret_cast<sockaddr *>(&peer), &size);
                             if (n < 0) return failed_or_blocked();
+                            net::Address sender{};
+                            sender.storage = peer;
+                            sender.length = size;
+                            capture(id, '<', sender.describe(), std::span(bytes.data(), static_cast<std::size_t>(n)));
                             rt.memory().copy_in(buffer, std::span(bytes.data(), static_cast<std::size_t>(n)));
                             store_guest_address(rt.memory(), from, from_length, peer);
                             return static_cast<std::uint32_t>(n);
@@ -1240,6 +1268,10 @@ void register_net_infra(HleRegistrar &hle) {
         const std::string method = request->method == 1u ? "POST" : request->method == 2u ? "HEAD" : "GET";
         std::cerr << "[net] " << method << " " << request->url << (url != request->url ? " (as " + url + ")" : "")
                   << "\n";
+        std::string sent;
+        for (const auto &[name, value] : headers) sent += name + ": " + value + "\r\n";
+        sent += "\r\n" + body;
+        capture(id, '>', method + ":" + url, std::span(reinterpret_cast<const std::uint8_t *>(sent.data()), sent.size()));
         request->exchange = std::make_shared<HttpExchange>();
         request->read = 0u;
         std::thread([exchange = request->exchange, url, method, headers, body, cookies = state().cookies] {
@@ -1261,6 +1293,9 @@ void register_net_infra(HleRegistrar &hle) {
             }
             trace("response " + std::to_string(exchange.status) + ", " + std::to_string(exchange.body.size()) +
                   " bytes");
+            const std::string received = exchange.header_text + "\r\n" + exchange.body;
+            capture(id, '<', "http:" + std::to_string(exchange.status),
+                    std::span(reinterpret_cast<const std::uint8_t *>(received.data()), received.size()));
             return 0u;
         });
     });
