@@ -259,7 +259,7 @@ void Menu::video() {
             std::string("Original keeps the PSP's shape with black bars at the sides or top. Stretch fills the "
                         "window by stretching the picture.") +
             (fill ? " Fill widens (or narrows) the game's view to the window's shape, keeping its height, and "
-                    "keeps the interface in the PSP's proportions."
+                    "scales the interface to fill the window."
                   : "");
         if (const int delta = choice_row("Aspect ratio", kAspects[current], options_for("video.aspect", description))) {
             s.aspect = static_cast<settings::Aspect>(cycle(current, delta, fill ? 3 : 2));

@@ -77,7 +77,7 @@ struct RendererConfig {
 // A target holds the game's 480x272 screen at a multiple of that size, or,
 // under Fill, at the window's shape: then each PSP pixel is wider (or taller)
 // than square, the game draws a view of that shape (GameProfile::view_aspect_frame),
-// and the 2D interface is drawn at its own proportions.
+// and all 2D layers scale together to fill that target.
 class VulkanRenderer {
 public:
     VulkanRenderer();

@@ -74,10 +74,6 @@ constexpr std::uint32_t kMaxTargetWidth = 8192u;
 // Frames a new window size has to hold before the targets follow it, so
 // dragging a window's edge does not rebuild them on every frame.
 constexpr std::uint32_t kSettleFrames = 12u;
-// A through-mode draw at least this wide (in PSP pixels) covers the screen:
-// a fade, a backdrop or a copy of the picture, which spreads with the 3D view
-// instead of keeping the interface's proportions.
-constexpr float kScreenWideDraw = 470.0f;
 // Room for one frame's vertices. With frame interpolation a frame cannot reuse
 // its region part way through, so all of it must fit: measured at 16.1 MiB in
 // the busiest areas found (Flooded Forest area 3, Tundra area 2), where 16 MiB
@@ -822,8 +818,6 @@ struct VulkanRenderer::Impl {
     VkExtent2D pending_extent{};
     std::uint32_t pending_frames{};
     bool resize_now{};
-    // The framebuffers the game showed last: its interface is drawn into them.
-    std::array<std::uint32_t, 2> display_addresses{};
     bool sharp_screen{};
     bool sharp_textures{};
     std::string device_name;
@@ -1959,14 +1953,9 @@ struct VulkanRenderer::Impl {
     void resize_targets(VkExtent2D extent);
     // After a present: follows the window's size or a changed setting.
     void follow_window();
-    // Fill makes every one of the game's 480x272 pixels wider (or taller)
-    // than square. The interface is drawn at `fit_x` x `fit_y` of its size
-    // about the screen's centre, which gives it square pixels again. False
-    // when nothing needs fitting.
-    [[nodiscard]] bool interface_fit(float &fit_x, float &fit_y) const;
-    [[nodiscard]] bool shows(std::uint32_t address) const {
-        return address != 0u && (address == display_addresses[0] || address == display_addresses[1]);
-    }
+    // Movies keep their original proportions under Fill. False when no
+    // letterboxing is needed.
+    [[nodiscard]] bool movie_fit(float &fit_x, float &fit_y) const;
     void submit_and_present(VkImage source, bool game_frame) {
         submit_and_present(command_buffer, frame_fence, source, game_frame, true);
     }
@@ -5285,7 +5274,7 @@ VkExtent2D VulkanRenderer::Impl::wanted_target_extent() const {
     return {width, height};
 }
 
-bool VulkanRenderer::Impl::interface_fit(float &fit_x, float &fit_y) const {
+bool VulkanRenderer::Impl::movie_fit(float &fit_x, float &fit_y) const {
     if (aspect != settings::Aspect::Fill) return false;
     const float x = static_cast<float>(target_extent.width) / static_cast<float>(kPspWidth);
     const float y = static_cast<float>(target_extent.height) / static_cast<float>(kPspHeight);
@@ -5755,7 +5744,7 @@ void VulkanRenderer::upload_frame(std::uint32_t display_address, const std::uint
     // A movie has the PSP's shape: under Fill it keeps it, with black beside
     // (or above and below) it.
     float fit_x = 1.0f, fit_y = 1.0f;
-    if (impl.interface_fit(fit_x, fit_y)) {
+    if (impl.movie_fit(fit_x, fit_y)) {
         const auto inset_x = static_cast<std::int32_t>(std::lround(0.5f * (1.0f - fit_x) * impl.target_extent.width));
         const auto inset_y = static_cast<std::int32_t>(std::lround(0.5f * (1.0f - fit_y) * impl.target_extent.height));
         blit.dstOffsets[0] = {inset_x, inset_y, 0};
@@ -6333,33 +6322,6 @@ void VulkanRenderer::submit(const DrawCall &call, const GuestMemory &memory) {
             ? impl.find_framebuffer_texture(memory, call.texture)
             : Impl::FramebufferTexture{};
 
-    // Under Fill the game's 480x272 screen is spread over a target of the
-    // window's shape, which suits the 3D view the game now draws at that
-    // shape, but would stretch the 2D interface. Its draws into the shown
-    // framebuffer are pulled in about the screen's centre to square pixels
-    // again. Draws that cover the screen's width (fades, backdrops) and
-    // draws that sample a rendered picture (blur, the quest-reward
-    // background) belong with the 3D view and stay spread.
-    float fit_x = 1.0f, fit_y = 1.0f;
-    bool fitted = false;
-    if (call.through && !call.clear_mode && framebuffer_source.target == nullptr &&
-        impl.shows(call.target.color_address) && impl.interface_fit(fit_x, fit_y)) {
-        float left = impl.scratch.front().x, right = left;
-        for (const GpuVertex &vertex : impl.scratch) {
-            left = std::min(left, vertex.x);
-            right = std::max(right, vertex.x);
-        }
-        if (right - left < kScreenWideDraw) {
-            fitted = true;
-            const float centre_x = 0.5f * static_cast<float>(kPspWidth);
-            const float centre_y = 0.5f * static_cast<float>(kPspHeight);
-            for (GpuVertex &vertex : impl.scratch) {
-                vertex.x = centre_x + (vertex.x - centre_x) * fit_x;
-                vertex.y = centre_y + (vertex.y - centre_y) * fit_y;
-            }
-        }
-    }
-
     static const bool no_merge_env = portablekit::env("NO_DRAW_MERGE") != nullptr;
     const bool merge = !no_merge_env && !perf::alternate_off(perf::NewPath::Merge);
     // A skinned draw recorded for drawing again keeps a copy of its vertices,
@@ -6592,6 +6554,9 @@ void VulkanRenderer::submit(const DrawCall &call, const GuestMemory &memory) {
     // A target holds the game's 480x272 screen whatever its size, so a PSP
     // pixel is scale_x by scale_y of its pixels: equal at a multiple of
     // 480x272, different under Fill.
+    // Keep all 2D layers in these same screen coordinates. Fitting only
+    // narrow draws separated text, borders and tiled comic art from their
+    // full-width backgrounds.
     const float scale_x = static_cast<float>(impl.target_extent.width) / static_cast<float>(kPspWidth);
     const float scale_y = static_cast<float>(impl.target_extent.height) / static_cast<float>(kPspHeight);
     VkViewport vk_viewport{0.0f, 0.0f, static_cast<float>(impl.target_extent.width),
@@ -6627,18 +6592,9 @@ void VulkanRenderer::submit(const DrawCall &call, const GuestMemory &memory) {
     const std::uint32_t sy1 = clamp_axis(call.viewport.scissor_y1, kPspHeight - 1u);
     const std::uint32_t sx2 = clamp_axis(std::max(call.viewport.scissor_x2, sx1), kPspWidth - 1u);
     const std::uint32_t sy2 = clamp_axis(std::max(call.viewport.scissor_y2, sy1), kPspHeight - 1u);
-    // The scissor's edges, in PSP pixels; a fitted draw's scissor is fitted
-    // with it, so a list the interface clips still clips at its own edges.
-    float edges[4]{static_cast<float>(sx1), static_cast<float>(sy1), static_cast<float>(sx2 + 1u),
-                   static_cast<float>(sy2 + 1u)};
-    if (fitted) {
-        const float centre_x = 0.5f * static_cast<float>(kPspWidth);
-        const float centre_y = 0.5f * static_cast<float>(kPspHeight);
-        edges[0] = centre_x + (edges[0] - centre_x) * fit_x;
-        edges[2] = centre_x + (edges[2] - centre_x) * fit_x;
-        edges[1] = centre_y + (edges[1] - centre_y) * fit_y;
-        edges[3] = centre_y + (edges[3] - centre_y) * fit_y;
-    }
+    // The scissor and every 2D layer use the same PSP screen coordinates.
+    const float edges[4]{static_cast<float>(sx1), static_cast<float>(sy1), static_cast<float>(sx2 + 1u),
+                         static_cast<float>(sy2 + 1u)};
     const auto to_pixels = [](float edge, float scale, std::uint32_t size) {
         return static_cast<std::int32_t>(
             std::clamp(std::lround(edge * scale), 0l, static_cast<long>(size)));
@@ -7931,10 +7887,6 @@ bool VulkanRenderer::present(std::uint32_t display_address,
     VkImage source = displayed != impl.targets.end() ? displayed->second.color : VK_NULL_HANDLE;
     impl.presented_target = displayed != impl.targets.end() ? displayed->first : 0u;
     if (impl.holding) source = impl.held.color;
-    if (display_address != impl.display_addresses[0]) {
-        impl.display_addresses[1] = impl.display_addresses[0];
-        impl.display_addresses[0] = display_address;
-    }
     const std::chrono::steady_clock::time_point now = std::chrono::steady_clock::now();
     // <prefix>_FRAME_RATE_CYCLE=30,60,90: the frame rate moves to the next one
     // listed every <prefix>_FRAME_RATE_CYCLE_SECONDS (default 10), so one run

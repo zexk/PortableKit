@@ -27,7 +27,7 @@ enum class PresentMode { Fifo, Mailbox, Immediate };
 // How the game's picture meets the window. Original keeps the PSP's shape with
 // black bars, Stretch fills the window by stretching it, and Fill gives the
 // game the window's shape: its view widens or narrows to match (the vertical
-// field of view stays), and the 2D interface keeps the PSP's proportions.
+// field of view stays), and all 2D layers scale together to fill the window.
 enum class Aspect { Original, Stretch, Fill };
 enum class PerfDisplay { Off, Overlay, OverlayAndLog, Log };
 enum class RightStick { Camera, DPad, Off };
