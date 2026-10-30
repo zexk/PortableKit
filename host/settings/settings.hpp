@@ -88,6 +88,10 @@ struct Settings {
     // it back to the second stick: move with the left, look with the right.
     // Only for a game whose camera driver offers it (CameraDriver::swaps_first_person).
     bool swap_sticks_first_person{true};
+    // The camera swings round behind the character as it moves, as the game
+    // does. Off leaves the camera where the player put it; recentring still
+    // works. Only for a game whose camera driver offers it (CameraDriver::follows).
+    bool camera_follow{true};
     // Degrees per second at full deflection, before the stick's own curve.
     float camera_speed{190.0f};
     // Degrees per second at full deflection while a bow or a bowgun aims.

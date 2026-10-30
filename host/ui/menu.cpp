@@ -781,6 +781,15 @@ void Menu::controls() {
                 settings::save();
             }
         }
+        if (driver->follows) {
+            o = options_for("input.camera_follow",
+                            "The camera swings round behind the character as it moves, as the game does. Off "
+                            "leaves the camera where you put it; recentring still works.");
+            if (toggle_row("Camera follows behind", s.camera_follow, o)) {
+                s.camera_follow = !s.camera_follow;
+                settings::save();
+            }
+        }
         o = options_for("input.camera_speed", "How fast the camera turns at full deflection, in degrees a second.");
         if (!s.analog_camera && !o.disabled) {
             o.disabled = true;
@@ -952,6 +961,7 @@ void Menu::controls() {
         restore("input.right_stick_zone", s.right_stick_zone, d.right_stick_zone);
         restore("input.analog_camera", s.analog_camera, d.analog_camera);
         restore("input.swap_sticks_first_person", s.swap_sticks_first_person, d.swap_sticks_first_person);
+        restore("input.camera_follow", s.camera_follow, d.camera_follow);
         restore("input.camera_speed", s.camera_speed, d.camera_speed);
         restore("input.aim_speed", s.aim_speed, d.aim_speed);
         restore("input.invert_camera_x", s.invert_camera_x, d.invert_camera_x);
