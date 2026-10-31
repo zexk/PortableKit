@@ -11,7 +11,9 @@
 # exactly), packaging/linux/README.txt, packaging/linux/<app id>.desktop and
 # packaging/linux/<app id>.metainfo.xml (with @VERSION@ and @DATE@), and its
 # generated code in generated/ (its generate step makes it; the code is the
-# same on every platform). This builds the executable, its overlay libraries
+# same on every platform). Multi-edition ports may set RELEASE_GENERATED_DIR
+# and RELEASE_CMAKE_ARGS in release.env; PORTABLEKIT_GAME_EDITION is forwarded
+# into the SDK. This builds the executable, its overlay libraries
 # and the bundled SDL3 and FFmpeg inside the
 # Steam Runtime 3 "sniper" SDK container (packaging/linux/build_in_sdk.sh),
 # packs both artifacts, checks that neither contains any game data, and
@@ -59,6 +61,7 @@ repo_dir="$(cd "$repo_dir" && pwd)"
 source "$repo_dir/packaging/release.env"
 : "${RELEASE_NAME:?}" "${RELEASE_SLUG:?}" "${RELEASE_TARGET:?}" "${RELEASE_APP_ID:?}"
 RELEASE_OVERLAYS="${RELEASE_OVERLAYS:-0}"
+RELEASE_GENERATED_DIR="${RELEASE_GENERATED_DIR:-generated}"
 app_id="$RELEASE_APP_ID"
 packaging="$repo_dir/packaging/linux"
 work="${PORTABLEKIT_RELEASE_WORK:-$repo_dir/out/release-linux}"
@@ -149,8 +152,8 @@ if [[ -n "$(git -C "$repo_dir" status --porcelain --untracked-files=no)" ]]; the
 fi
 
 if [[ $skip_build -eq 0 ]]; then
-    ls "$repo_dir"/generated/*.cpp > /dev/null 2>&1 ||
-        fail "no generated code in $repo_dir/generated; run the game's generate step first"
+    ls "$repo_dir/$RELEASE_GENERATED_DIR/"*.cpp > /dev/null 2>&1 ||
+        fail "no generated code in $repo_dir/$RELEASE_GENERATED_DIR; run the game's generate step first"
 
     if command -v podman > /dev/null; then container=podman
     elif command -v docker > /dev/null; then container=docker
@@ -169,7 +172,7 @@ if [[ $skip_build -eq 0 ]]; then
     "$container" run --rm "${user_args[@]}" --security-opt label=disable \
         "${mounts[@]}" -w "$repo_dir" \
         -e HOME="$work/home" -e PORTABLEKIT_RELEASE_WORK="$work" -e PORTABLEKIT_JOBS="$jobs" \
-        -e PORTABLEKIT_GAME="$repo_dir" \
+        -e PORTABLEKIT_GAME="$repo_dir" -e PORTABLEKIT_GAME_EDITION="${PORTABLEKIT_GAME_EDITION:-}" \
         "$SDK_IMAGE" bash "$kit_dir/packaging/linux/build_in_sdk.sh"
 fi
 
@@ -177,6 +180,9 @@ fi
 overlay_count="$(find "$stage/overlays" -name '*.so' | wc -l)"
 [[ "$overlay_count" -eq "$RELEASE_OVERLAYS" ]] || fail "expected $RELEASE_OVERLAYS overlay libraries, found $overlay_count"
 fill() { sed -e "s/@NAME@/$RELEASE_NAME/g" -e "s/@SLUG@/$RELEASE_SLUG/g" -e "s/@APP_ID@/$app_id/g" "$1"; }
+if [[ -n "${RELEASE_AUDIT:-}" ]]; then
+    python3 "$repo_dir/$RELEASE_AUDIT" "$PORTABLEKIT_GAME_EDITION" --stage "$stage"
+fi
 check_no_game_data "$stage" "the staged build"
 rm -rf "$dist"
 mkdir -p "$dist"

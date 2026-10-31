@@ -29,6 +29,7 @@ source "$kit_dir/packaging/sources.sh"
 # shellcheck disable=SC1091
 source "$repo_dir/packaging/release.env"
 RELEASE_OVERLAYS="${RELEASE_OVERLAYS:-0}"
+RELEASE_GENERATED_DIR="${RELEASE_GENERATED_DIR:-generated}"
 
 sources="$work/sources"
 deps="$work/deps"
@@ -37,7 +38,7 @@ build="$work/build"
 stage="$work/stage/$RELEASE_SLUG"
 
 export CC=gcc-14 CXX=g++-14
-export CCACHE_DIR="$work/ccache" CCACHE_MAXSIZE=20G
+export CCACHE_DIR="$work/ccache" CCACHE_MAXSIZE="${RELEASE_CCACHE_MAXSIZE:-20G}"
 export PKG_CONFIG_PATH="$deps/lib/pkgconfig"
 mkdir -p "$sources" "$deps" "$deps_build"
 
@@ -77,15 +78,15 @@ if ! stamp_matches sdl3 "$sdl_stamp"; then
 fi
 
 step "Configuring $RELEASE_NAME (release)"
-ls "$repo_dir"/generated/*.cpp > /dev/null 2>&1 ||
-    { echo "error: no generated code in $repo_dir/generated; run the game's generate step first" >&2; exit 1; }
+ls "$repo_dir/$RELEASE_GENERATED_DIR/"*.cpp > /dev/null 2>&1 ||
+    { echo "error: no generated code in $repo_dir/$RELEASE_GENERATED_DIR; run the game's generate step first" >&2; exit 1; }
 cmake -S "$repo_dir" -B "$build" -G Ninja \
     -DCMAKE_BUILD_TYPE=Release \
     -DPORTABLEKIT_RELEASE=ON \
     -DPORTABLEKIT_FFMPEG=bundled \
     -DPORTABLEKIT_FFMPEG_DOWNLOAD_DIR="$sources" \
     -DCMAKE_PREFIX_PATH="$deps" \
-    -DPSPRECOMP_GENERATED_JOBS="$jobs" | tee "$work/configure.log"
+    -DPSPRECOMP_GENERATED_JOBS="$jobs" "${RELEASE_CMAKE_ARGS[@]}" | tee "$work/configure.log"
 # A release without the renderer or without music would configure fine; refuse it.
 for feature in "$RELEASE_TARGET: Vulkan renderer enabled" "bundled FFmpeg"; do
     if ! grep -q "$feature" "$work/configure.log"; then
@@ -112,6 +113,7 @@ fi
 # SDL3 comes from the dependency prefix, FFmpeg from the build's bin/lib.
 needed() { objdump -p "$1" | awk '$1 == "NEEDED" { print $2 }'; }
 pending=("$stage/$RELEASE_NAME")
+if [[ "$RELEASE_OVERLAYS" -gt 0 ]]; then pending+=("$stage/overlays/"*.so); fi
 while [[ ${#pending[@]} -gt 0 ]]; do
     current="${pending[0]}"
     pending=("${pending[@]:1}")
@@ -129,7 +131,9 @@ while [[ ${#pending[@]} -gt 0 ]]; do
 done
 
 cp "$sources/NotoSansCJKjp-Regular.otf" "$stage/fonts/"
-cp "$repo_dir/LICENSE" "$stage/licenses/$RELEASE_NAME-LICENSE.txt"
+if [[ -f "$repo_dir/LICENSE" ]]; then
+    cp "$repo_dir/LICENSE" "$stage/licenses/$RELEASE_NAME-LICENSE.txt"
+fi
 cp "$kit_dir/LICENSE" "$stage/licenses/PortableKit-LICENSE.txt"
 cp "$repo_dir/packaging/THIRD_PARTY_NOTICES.md" "$stage/licenses/THIRD_PARTY_NOTICES.md"
 cp "$deps_build/SDL3-$SDL3_VERSION/LICENSE.txt" "$stage/licenses/SDL3-LICENSE.txt"
