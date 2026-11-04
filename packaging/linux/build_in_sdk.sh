@@ -107,6 +107,11 @@ if [[ "$RELEASE_OVERLAYS" -gt 0 ]]; then
     cp "$build/bin/overlays/"*.so "$stage/overlays/"
     strip --strip-unneeded "$stage/overlays/"*.so
 fi
+# Other programs the game ships beside its executable (RELEASE_EXTRA_PROGRAMS).
+for program in ${RELEASE_EXTRA_PROGRAMS[@]+"${RELEASE_EXTRA_PROGRAMS[@]}"}; do
+    install -m 755 "$build/bin/$program" "$stage/$program"
+    strip --strip-unneeded "$stage/$program"
+done
 
 # The libraries built above that the executable needs, directly or through
 # each other, under the names the loader looks for.
