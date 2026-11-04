@@ -51,6 +51,8 @@ struct Settings {
     Aspect aspect{Aspect::Original};
     bool sharp_screen{};               // nearest instead of linear scaling to the window
     bool sharp_textures{};             // nearest instead of linear texture sampling
+    std::uint32_t msaa{1u};            // samples per pixel of the game's render targets: 1 (off), 2, 4, 8; at restart
+    std::uint32_t anisotropy{1u};      // anisotropic filtering of the game's textures: 1 (off), 2, 4, 8, 16; at restart
     bool texture_pack{true};           // draw an installed HD texture pack's images instead of the game's
     std::string texture_pack_folder;   // a pack used where it is instead of textures/<disc id>; empty: none
     bool unthrottled{};                // let emulated time run ahead of real time

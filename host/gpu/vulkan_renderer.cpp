@@ -1083,6 +1083,16 @@ struct VulkanRenderer::Impl {
         std::array<VkDescriptorSet, 2> copy_descriptors{};
         std::uint64_t copy_serial{};
         bool copy_valid{};
+        // Multisampling (video.msaa): the image the passes draw into, resolved
+        // into `color` at the end of each; its depth is multisampled too.
+        // A write into `color` outside a pass leaves it stale, and the next
+        // pass first copies `color` back into it (seed_multisampled).
+        VkImage msaa{};
+        VkDeviceMemory msaa_memory{};
+        VkImageView msaa_view{};
+        VkFramebuffer seed_framebuffer{};
+        VkDescriptorSet seed_set{};
+        bool msaa_stale{};
     };
     std::map<std::uint32_t, Target> targets;
     // Write-back of the displayed framebuffer to guest VRAM (write_back_frame):
@@ -1217,6 +1227,33 @@ struct VulkanRenderer::Impl {
     // a tiled GPU then does not read the target from memory first.
     // <prefix>_NO_CLEAR_LOAD always loads, as before.
     std::array<VkRenderPass, 4> discard_passes{};
+    // video.msaa as far as the GPU allows it, and the pass and pipeline that
+    // copy a target's `color` into its multisampled image.
+    VkSampleCountFlagBits samples{VK_SAMPLE_COUNT_1_BIT};
+    [[nodiscard]] bool multisampled() const { return samples != VK_SAMPLE_COUNT_1_BIT; }
+    VkRenderPass seed_pass{};
+    VkDescriptorSetLayout seed_set_layout{};
+    VkDescriptorPool seed_pool{};
+    VkPipelineLayout seed_layout{};
+    VkPipeline seed_pipeline{};
+    VkShaderModule seed_vertex{};
+    VkShaderModule seed_fragment{};
+    bool create_seed_pipeline(std::string &error);
+    void seed_multisampled(VkCommandBuffer commands, Target &target);
+    // Moves a new target's depth and multisampled image, undefined, into
+    // the layouts the render pass expects.
+    void initialize_attachments(VkCommandBuffer commands, Target &target);
+    // video.anisotropy as far as the GPU allows it. Above 1 the game's
+    // textures get a full mip chain for the smooth sampler to filter across.
+    float anisotropy{1.0f};
+    [[nodiscard]] std::uint32_t texture_levels(std::uint32_t width, std::uint32_t height) const {
+        if (anisotropy <= 1.0f) return 1u;
+        std::uint32_t levels = 1u;
+        for (std::uint32_t size = std::max(width, height); size > 1u; size >>= 1u) ++levels;
+        return levels;
+    }
+    void generate_mips(VkCommandBuffer commands, VkImage image, std::uint32_t width, std::uint32_t height,
+                       std::uint32_t levels);
     VkExtent2D target_extent{};
 
     VkShaderModule vertex_shader{};
@@ -1827,14 +1864,15 @@ struct VulkanRenderer::Impl {
 
     bool create_image(std::uint32_t width, std::uint32_t height, VkFormat format, VkImageUsageFlags usage,
                       VkImage &image, VkDeviceMemory &memory, VkImageView &view, VkImageAspectFlags aspect,
-                      std::string &error) {
+                      std::string &error, VkSampleCountFlagBits samples = VK_SAMPLE_COUNT_1_BIT,
+                      std::uint32_t levels = 1u) {
         VkImageCreateInfo info{VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO};
         info.imageType = VK_IMAGE_TYPE_2D;
         info.format = format;
         info.extent = {width, height, 1u};
-        info.mipLevels = 1u;
+        info.mipLevels = levels;
         info.arrayLayers = 1u;
-        info.samples = VK_SAMPLE_COUNT_1_BIT;
+        info.samples = samples;
         info.tiling = VK_IMAGE_TILING_OPTIMAL;
         info.usage = usage;
         info.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
@@ -1863,19 +1901,20 @@ struct VulkanRenderer::Impl {
         view_info.image = image;
         view_info.viewType = VK_IMAGE_VIEW_TYPE_2D;
         view_info.format = format;
-        view_info.subresourceRange = {aspect, 0u, 1u, 0u, 1u};
+        view_info.subresourceRange = {aspect, 0u, levels, 0u, 1u};
         return check(vkCreateImageView(device, &view_info, nullptr, &view), "vkCreateImageView", error);
     }
 
     void transition(VkCommandBuffer commands, VkImage image, VkImageLayout from, VkImageLayout to,
-                    VkImageAspectFlags aspect = VK_IMAGE_ASPECT_COLOR_BIT) {
+                    VkImageAspectFlags aspect = VK_IMAGE_ASPECT_COLOR_BIT, std::uint32_t base_level = 0u,
+                    std::uint32_t levels = 1u) {
         VkImageMemoryBarrier barrier{VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER};
         barrier.oldLayout = from;
         barrier.newLayout = to;
         barrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
         barrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
         barrier.image = image;
-        barrier.subresourceRange = {aspect, 0u, 1u, 0u, 1u};
+        barrier.subresourceRange = {aspect, base_level, levels, 0u, 1u};
         barrier.srcAccessMask = VK_ACCESS_MEMORY_WRITE_BIT;
         barrier.dstAccessMask = VK_ACCESS_MEMORY_READ_BIT | VK_ACCESS_MEMORY_WRITE_BIT;
         vkCmdPipelineBarrier(commands, VK_PIPELINE_STAGE_ALL_COMMANDS_BIT, VK_PIPELINE_STAGE_ALL_COMMANDS_BIT, 0u,
@@ -2098,6 +2137,12 @@ VulkanRenderer::~VulkanRenderer() { shutdown(); }
 bool VulkanRenderer::available() const noexcept { return impl_ && impl_->ready; }
 bool VulkanRenderer::quit_requested() const noexcept { return impl_ && impl_->quit; }
 std::uint64_t VulkanRenderer::frames_presented() const noexcept { return impl_ ? impl_->frames : 0u; }
+std::uint32_t VulkanRenderer::msaa_samples() const noexcept {
+    return impl_ ? static_cast<std::uint32_t>(impl_->samples) : 1u;
+}
+std::uint32_t VulkanRenderer::anisotropy() const noexcept {
+    return impl_ ? static_cast<std::uint32_t>(impl_->anisotropy) : 1u;
+}
 CameraReading VulkanRenderer::camera() const noexcept { return impl_ ? impl_->reading : CameraReading{}; }
 std::uint64_t VulkanRenderer::draws_submitted() const noexcept { return impl_ ? impl_->draws : 0u; }
 
@@ -2274,6 +2319,19 @@ bool VulkanRenderer::initialize(const RendererConfig &config, std::string &error
     if (supported_features.robustBufferAccess == VK_TRUE && portablekit::env("NO_ROBUST_BUFFERS") == nullptr)
         enabled_features.robustBufferAccess = VK_TRUE;
     std::cout << "[render] robust buffer access " << (enabled_features.robustBufferAccess ? "on" : "off") << "\n";
+    // video.msaa and video.anisotropy, rounded down to what the device has.
+    VkPhysicalDeviceProperties device_properties{};
+    vkGetPhysicalDeviceProperties(impl.physical_device, &device_properties);
+    const VkSampleCountFlags sample_counts = device_properties.limits.framebufferColorSampleCounts &
+                                             device_properties.limits.framebufferDepthSampleCounts;
+    std::uint32_t samples = 8u;
+    while (samples > 1u && (samples > player.msaa || (sample_counts & samples) == 0u)) samples >>= 1u;
+    impl.samples = static_cast<VkSampleCountFlagBits>(samples);
+    if (player.anisotropy > 1u && supported_features.samplerAnisotropy == VK_TRUE) {
+        enabled_features.samplerAnisotropy = VK_TRUE;
+        impl.anisotropy = std::min(static_cast<float>(player.anisotropy), device_properties.limits.maxSamplerAnisotropy);
+    }
+    std::cout << "[render] multisampling x" << samples << ", anisotropic filtering x" << impl.anisotropy << "\n";
     VkDeviceCreateInfo device_info{VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO};
     device_info.pEnabledFeatures = &enabled_features;
     device_info.queueCreateInfoCount = 1u;
@@ -2339,9 +2397,11 @@ bool VulkanRenderer::initialize(const RendererConfig &config, std::string &error
     // No target exists yet: they are made at this size when first drawn.
     impl.target_extent = impl.wanted_target_extent();
 
-    std::array<VkAttachmentDescription, 2> attachments{};
+    // Multisampled, colour and depth draw at impl.samples and colour resolves
+    // into the single-sampled image (attachment 2) everything else reads.
+    std::array<VkAttachmentDescription, 3> attachments{};
     attachments[0].format = VK_FORMAT_R8G8B8A8_UNORM;
-    attachments[0].samples = VK_SAMPLE_COUNT_1_BIT;
+    attachments[0].samples = impl.samples;
     attachments[0].loadOp = VK_ATTACHMENT_LOAD_OP_LOAD;
     attachments[0].storeOp = VK_ATTACHMENT_STORE_OP_STORE;
     attachments[0].stencilLoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
@@ -2349,28 +2409,34 @@ bool VulkanRenderer::initialize(const RendererConfig &config, std::string &error
     attachments[0].initialLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
     attachments[0].finalLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
     attachments[1] = attachments[0];
+    attachments[2] = attachments[0];
+    attachments[2].samples = VK_SAMPLE_COUNT_1_BIT;
+    attachments[2].loadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
     impl.choose_depth_format();
     attachments[1].format = impl.depth_format;
     attachments[1].initialLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
     attachments[1].finalLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
     VkAttachmentReference color_reference{0u, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL};
     VkAttachmentReference depth_reference{1u, VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL};
+    VkAttachmentReference resolve_reference{2u, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL};
     VkSubpassDescription subpass{};
     subpass.pipelineBindPoint = VK_PIPELINE_BIND_POINT_GRAPHICS;
     subpass.colorAttachmentCount = 1u;
     subpass.pColorAttachments = &color_reference;
     subpass.pDepthStencilAttachment = &depth_reference;
+    if (impl.multisampled()) subpass.pResolveAttachments = &resolve_reference;
     VkRenderPassCreateInfo render_pass_info{VK_STRUCTURE_TYPE_RENDER_PASS_CREATE_INFO};
-    render_pass_info.attachmentCount = static_cast<std::uint32_t>(attachments.size());
+    render_pass_info.attachmentCount = impl.multisampled() ? 3u : 2u;
     render_pass_info.pAttachments = attachments.data();
     render_pass_info.subpassCount = 1u;
     render_pass_info.pSubpasses = &subpass;
     if (!check(vkCreateRenderPass(impl.device, &render_pass_info, nullptr, &impl.render_pass), "vkCreateRenderPass",
                error))
         return false;
+    if (impl.multisampled() && !impl.create_seed_pipeline(error)) return false;
     if (portablekit::env("NO_CLEAR_LOAD") == nullptr) {
         for (std::uint32_t variant = 1u; variant < 4u; ++variant) {
-            std::array<VkAttachmentDescription, 2> skipped = attachments;
+            std::array<VkAttachmentDescription, 3> skipped = attachments;
             if ((variant & 1u) != 0u) skipped[0].loadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
             if ((variant & 2u) != 0u) skipped[1].loadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
             VkRenderPassCreateInfo variant_info = render_pass_info;
@@ -2470,8 +2536,20 @@ bool VulkanRenderer::initialize(const RendererConfig &config, std::string &error
     sampler_info.addressModeV = VK_SAMPLER_ADDRESS_MODE_REPEAT;
     sampler_info.addressModeW = VK_SAMPLER_ADDRESS_MODE_REPEAT;
     sampler_info.maxLod = 1.0f;
+    // Anisotropic filtering: the smooth sampler filters across the textures'
+    // mip chain (texture_levels). The others read level 0 only, as before.
+    if (impl.anisotropy > 1.0f) {
+        sampler_info.mipmapMode = VK_SAMPLER_MIPMAP_MODE_LINEAR;
+        sampler_info.maxLod = VK_LOD_CLAMP_NONE;
+        sampler_info.anisotropyEnable = VK_TRUE;
+        sampler_info.maxAnisotropy = impl.anisotropy;
+    }
     if (!check(vkCreateSampler(impl.device, &sampler_info, nullptr, &impl.sampler), "vkCreateSampler", error))
         return false;
+    sampler_info.mipmapMode = VK_SAMPLER_MIPMAP_MODE_NEAREST;
+    sampler_info.maxLod = 0.0f;
+    sampler_info.anisotropyEnable = VK_FALSE;
+    sampler_info.maxAnisotropy = 1.0f;
     sampler_info.magFilter = VK_FILTER_NEAREST;
     sampler_info.minFilter = VK_FILTER_NEAREST;
     if (!check(vkCreateSampler(impl.device, &sampler_info, nullptr, &impl.sharp_sampler), "vkCreateSampler", error))
@@ -3685,6 +3763,11 @@ void VulkanRenderer::Impl::destroy_target(Target &target) {
     vkDestroyImageView(device, target.copy_view, nullptr);
     vkDestroyImage(device, target.copy, nullptr);
     vkFreeMemory(device, target.copy_memory, nullptr);
+    if (target.seed_set != VK_NULL_HANDLE) vkFreeDescriptorSets(device, seed_pool, 1u, &target.seed_set);
+    vkDestroyFramebuffer(device, target.seed_framebuffer, nullptr);
+    vkDestroyImageView(device, target.msaa_view, nullptr);
+    vkDestroyImage(device, target.msaa, nullptr);
+    vkFreeMemory(device, target.msaa_memory, nullptr);
     vkDestroyFramebuffer(device, target.framebuffer, nullptr);
     vkDestroyImageView(device, target.depth_view, nullptr);
     vkDestroyImage(device, target.depth, nullptr);
@@ -3731,25 +3814,48 @@ VulkanRenderer::Impl::Target *VulkanRenderer::Impl::target_for(std::uint32_t add
 }
 
 bool VulkanRenderer::Impl::create_target(Target &target, std::string &error) {
+    // Multisampled, the seed pass samples `color`.
+    const VkImageUsageFlags sampled = multisampled() ? VK_IMAGE_USAGE_SAMPLED_BIT : 0u;
     if (!create_image(target_extent.width, target_extent.height, VK_FORMAT_R8G8B8A8_UNORM,
                       VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT |
-                          VK_IMAGE_USAGE_TRANSFER_DST_BIT,
+                          VK_IMAGE_USAGE_TRANSFER_DST_BIT | sampled,
                       target.color,
                       target.color_memory, target.color_view, VK_IMAGE_ASPECT_COLOR_BIT, error))
         return false;
     if (!create_image(target_extent.width, target_extent.height, depth_format,
                       VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT, target.depth, target.depth_memory,
-                      target.depth_view, depth_aspect(), error))
+                      target.depth_view, depth_aspect(), error, samples))
         return false;
-    const std::array<VkImageView, 2> views{target.color_view, target.depth_view};
     VkFramebufferCreateInfo info{VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO};
-    info.renderPass = render_pass;
-    info.attachmentCount = static_cast<std::uint32_t>(views.size());
-    info.pAttachments = views.data();
     info.width = target_extent.width;
     info.height = target_extent.height;
     info.layers = 1u;
+    if (multisampled()) {
+        if (!create_image(target_extent.width, target_extent.height, VK_FORMAT_R8G8B8A8_UNORM,
+                          VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT, target.msaa, target.msaa_memory, target.msaa_view,
+                          VK_IMAGE_ASPECT_COLOR_BIT, error, samples))
+            return false;
+        info.renderPass = seed_pass;
+        info.attachmentCount = 1u;
+        info.pAttachments = &target.msaa_view;
+        if (!check(vkCreateFramebuffer(device, &info, nullptr, &target.seed_framebuffer), "vkCreateFramebuffer",
+                   error))
+            return false;
+    }
+    const std::array<VkImageView, 3> views{multisampled() ? target.msaa_view : target.color_view, target.depth_view,
+                                           target.color_view};
+    info.renderPass = render_pass;
+    info.attachmentCount = multisampled() ? 3u : 2u;
+    info.pAttachments = views.data();
     return check(vkCreateFramebuffer(device, &info, nullptr, &target.framebuffer), "vkCreateFramebuffer", error);
+}
+
+void VulkanRenderer::Impl::initialize_attachments(VkCommandBuffer commands, Target &target) {
+    transition(commands, target.depth, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL,
+               depth_aspect());
+    if (target.msaa != VK_NULL_HANDLE)
+        transition(commands, target.msaa, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL);
+    target.msaa_stale = false;
 }
 
 // Attachments are loaded, not cleared, so a new target starts undefined:
@@ -3757,9 +3863,191 @@ bool VulkanRenderer::Impl::create_target(Target &target, std::string &error) {
 void VulkanRenderer::Impl::initialize_layouts(VkCommandBuffer commands, Target &target) {
     if (target.initialized) return;
     transition(commands, target.color, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL);
-    transition(commands, target.depth, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL,
-               depth_aspect());
+    initialize_attachments(commands, target);
     target.initialized = true;
+}
+
+// Copies `color` into the multisampled image, every sample of a pixel the
+// pixel's colour, after something other than a pass wrote `color`.
+void VulkanRenderer::Impl::seed_multisampled(VkCommandBuffer commands, Target &target) {
+    target.msaa_stale = false;
+    if (target.seed_set == VK_NULL_HANDLE) {
+        VkDescriptorSetAllocateInfo allocate{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO};
+        allocate.descriptorPool = seed_pool;
+        allocate.descriptorSetCount = 1u;
+        allocate.pSetLayouts = &seed_set_layout;
+        if (vkAllocateDescriptorSets(device, &allocate, &target.seed_set) != VK_SUCCESS) {
+            target.seed_set = VK_NULL_HANDLE;
+            static bool told = false;
+            if (!told) std::cout << "[render] multisampling: no room to copy a target into its samples\n";
+            told = true;
+            return;
+        }
+        VkDescriptorImageInfo image_info{clamp_sharp_sampler, target.color_view,
+                                         VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
+        VkWriteDescriptorSet write{VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET};
+        write.dstSet = target.seed_set;
+        write.descriptorCount = 1u;
+        write.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+        write.pImageInfo = &image_info;
+        vkUpdateDescriptorSets(device, 1u, &write, 0u, nullptr);
+    }
+    transition(commands, target.color, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
+               VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+    VkRenderPassBeginInfo pass{VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO};
+    pass.renderPass = seed_pass;
+    pass.framebuffer = target.seed_framebuffer;
+    pass.renderArea = {{0, 0}, target_extent};
+    vkCmdBeginRenderPass(commands, &pass, VK_SUBPASS_CONTENTS_INLINE);
+    const VkViewport viewport{0.0f, 0.0f, static_cast<float>(target_extent.width),
+                              static_cast<float>(target_extent.height), 0.0f, 1.0f};
+    const VkRect2D scissor{{0, 0}, target_extent};
+    vkCmdSetViewport(commands, 0u, 1u, &viewport);
+    vkCmdSetScissor(commands, 0u, 1u, &scissor);
+    vkCmdBindPipeline(commands, VK_PIPELINE_BIND_POINT_GRAPHICS, seed_pipeline);
+    vkCmdBindDescriptorSets(commands, VK_PIPELINE_BIND_POINT_GRAPHICS, seed_layout, 0u, 1u, &target.seed_set, 0u,
+                            nullptr);
+    const std::int32_t unturned = 0;
+    vkCmdPushConstants(commands, seed_layout, VK_SHADER_STAGE_VERTEX_BIT, 0u, sizeof(unturned), &unturned);
+    vkCmdDraw(commands, 3u, 1u, 0u, 0u);
+    vkCmdEndRenderPass(commands);
+    transition(commands, target.color, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+               VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL);
+}
+
+// The pass and pipeline seed_multisampled draws with: rotate.vert's triangle,
+// unturned, and rotate.frag's copy, at the targets' sample count.
+bool VulkanRenderer::Impl::create_seed_pipeline(std::string &error) {
+    VkAttachmentDescription attachment{};
+    attachment.format = VK_FORMAT_R8G8B8A8_UNORM;
+    attachment.samples = samples;
+    attachment.loadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
+    attachment.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
+    attachment.stencilLoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
+    attachment.stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
+    attachment.initialLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+    attachment.finalLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+    VkAttachmentReference reference{0u, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL};
+    VkSubpassDescription subpass{};
+    subpass.pipelineBindPoint = VK_PIPELINE_BIND_POINT_GRAPHICS;
+    subpass.colorAttachmentCount = 1u;
+    subpass.pColorAttachments = &reference;
+    VkRenderPassCreateInfo pass_info{VK_STRUCTURE_TYPE_RENDER_PASS_CREATE_INFO};
+    pass_info.attachmentCount = 1u;
+    pass_info.pAttachments = &attachment;
+    pass_info.subpassCount = 1u;
+    pass_info.pSubpasses = &subpass;
+    if (!check(vkCreateRenderPass(device, &pass_info, nullptr, &seed_pass), "vkCreateRenderPass", error)) return false;
+
+    VkDescriptorSetLayoutBinding binding{};
+    binding.binding = 0u;
+    binding.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+    binding.descriptorCount = 1u;
+    binding.stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
+    VkDescriptorSetLayoutCreateInfo set_info{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO};
+    set_info.bindingCount = 1u;
+    set_info.pBindings = &binding;
+    if (!check(vkCreateDescriptorSetLayout(device, &set_info, nullptr, &seed_set_layout), "vkCreateDescriptorSetLayout",
+               error))
+        return false;
+    // One set per target, made the first time it is seeded.
+    constexpr std::uint32_t kMaxSeededTargets = 256u;
+    VkDescriptorPoolSize pool_size{VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, kMaxSeededTargets};
+    VkDescriptorPoolCreateInfo pool_info{VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO};
+    pool_info.flags = VK_DESCRIPTOR_POOL_CREATE_FREE_DESCRIPTOR_SET_BIT;
+    pool_info.maxSets = kMaxSeededTargets;
+    pool_info.poolSizeCount = 1u;
+    pool_info.pPoolSizes = &pool_size;
+    if (!check(vkCreateDescriptorPool(device, &pool_info, nullptr, &seed_pool), "vkCreateDescriptorPool", error))
+        return false;
+    VkPushConstantRange push{VK_SHADER_STAGE_VERTEX_BIT, 0u, sizeof(std::int32_t)};
+    VkPipelineLayoutCreateInfo layout_info{VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO};
+    layout_info.setLayoutCount = 1u;
+    layout_info.pSetLayouts = &seed_set_layout;
+    layout_info.pushConstantRangeCount = 1u;
+    layout_info.pPushConstantRanges = &push;
+    if (!check(vkCreatePipelineLayout(device, &layout_info, nullptr, &seed_layout), "vkCreatePipelineLayout", error))
+        return false;
+
+    const auto create_shader = [&](const std::uint32_t *code, std::size_t size, VkShaderModule &module) {
+        VkShaderModuleCreateInfo info{VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO};
+        info.codeSize = size;
+        info.pCode = code;
+        return check(vkCreateShaderModule(device, &info, nullptr, &module), "vkCreateShaderModule", error);
+    };
+    if (!create_shader(kRotateVertexShader, sizeof(kRotateVertexShader), seed_vertex)) return false;
+    if (!create_shader(kRotateFragmentShader, sizeof(kRotateFragmentShader), seed_fragment)) return false;
+    std::array<VkPipelineShaderStageCreateInfo, 2> stages{};
+    stages[0].sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
+    stages[0].stage = VK_SHADER_STAGE_VERTEX_BIT;
+    stages[0].module = seed_vertex;
+    stages[0].pName = "main";
+    stages[1].sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
+    stages[1].stage = VK_SHADER_STAGE_FRAGMENT_BIT;
+    stages[1].module = seed_fragment;
+    stages[1].pName = "main";
+    VkPipelineVertexInputStateCreateInfo vertex_input{VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO};
+    VkPipelineInputAssemblyStateCreateInfo assembly{VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO};
+    assembly.topology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST;
+    VkPipelineViewportStateCreateInfo viewport{VK_STRUCTURE_TYPE_PIPELINE_VIEWPORT_STATE_CREATE_INFO};
+    viewport.viewportCount = 1u;
+    viewport.scissorCount = 1u;
+    VkPipelineRasterizationStateCreateInfo raster{VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO};
+    raster.polygonMode = VK_POLYGON_MODE_FILL;
+    raster.cullMode = VK_CULL_MODE_NONE;
+    raster.frontFace = VK_FRONT_FACE_COUNTER_CLOCKWISE;
+    raster.lineWidth = 1.0f;
+    VkPipelineMultisampleStateCreateInfo multisample{VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO};
+    multisample.rasterizationSamples = samples;
+    VkPipelineColorBlendAttachmentState blend_attachment{};
+    blend_attachment.colorWriteMask =
+        VK_COLOR_COMPONENT_R_BIT | VK_COLOR_COMPONENT_G_BIT | VK_COLOR_COMPONENT_B_BIT | VK_COLOR_COMPONENT_A_BIT;
+    VkPipelineColorBlendStateCreateInfo blend{VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO};
+    blend.attachmentCount = 1u;
+    blend.pAttachments = &blend_attachment;
+    const std::array<VkDynamicState, 2> dynamic_states{VK_DYNAMIC_STATE_VIEWPORT, VK_DYNAMIC_STATE_SCISSOR};
+    VkPipelineDynamicStateCreateInfo dynamic{VK_STRUCTURE_TYPE_PIPELINE_DYNAMIC_STATE_CREATE_INFO};
+    dynamic.dynamicStateCount = static_cast<std::uint32_t>(dynamic_states.size());
+    dynamic.pDynamicStates = dynamic_states.data();
+    VkGraphicsPipelineCreateInfo pipeline_info{VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO};
+    pipeline_info.stageCount = static_cast<std::uint32_t>(stages.size());
+    pipeline_info.pStages = stages.data();
+    pipeline_info.pVertexInputState = &vertex_input;
+    pipeline_info.pInputAssemblyState = &assembly;
+    pipeline_info.pViewportState = &viewport;
+    pipeline_info.pRasterizationState = &raster;
+    pipeline_info.pMultisampleState = &multisample;
+    pipeline_info.pColorBlendState = &blend;
+    pipeline_info.pDynamicState = &dynamic;
+    pipeline_info.layout = seed_layout;
+    pipeline_info.renderPass = seed_pass;
+    return check(vkCreateGraphicsPipelines(device, VK_NULL_HANDLE, 1u, &pipeline_info, nullptr, &seed_pipeline),
+                 "vkCreateGraphicsPipelines", error);
+}
+
+// Every level after the first from the one before, ending with all of them
+// ready to sample. Level 0 has just been written (TRANSFER_DST).
+void VulkanRenderer::Impl::generate_mips(VkCommandBuffer commands, VkImage image, std::uint32_t width,
+                                         std::uint32_t height, std::uint32_t levels) {
+    for (std::uint32_t level = 1u; level < levels; ++level) {
+        transition(commands, image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+                   VK_IMAGE_ASPECT_COLOR_BIT, level - 1u);
+        const std::uint32_t next_width = std::max(width / 2u, 1u);
+        const std::uint32_t next_height = std::max(height / 2u, 1u);
+        VkImageBlit blit{};
+        blit.srcSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, level - 1u, 0u, 1u};
+        blit.srcOffsets[1] = {static_cast<std::int32_t>(width), static_cast<std::int32_t>(height), 1};
+        blit.dstSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, level, 0u, 1u};
+        blit.dstOffsets[1] = {static_cast<std::int32_t>(next_width), static_cast<std::int32_t>(next_height), 1};
+        vkCmdBlitImage(commands, image, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, image,
+                       VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1u, &blit, VK_FILTER_LINEAR);
+        width = next_width;
+        height = next_height;
+    }
+    transition(commands, image, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+               VK_IMAGE_ASPECT_COLOR_BIT, 0u, levels - 1u);
+    transition(commands, image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+               VK_IMAGE_ASPECT_COLOR_BIT, levels - 1u);
 }
 
 void VulkanRenderer::Impl::destroy_upload() {
@@ -3814,15 +4102,10 @@ void VulkanRenderer::Impl::begin_pass(std::uint32_t address, std::uint32_t overw
     std::string error;
     Target *target = target_for(address, error);
     if (target == nullptr) return;
-    if (!target->initialized) {
-        // Attachments are loaded, not cleared, so a new target starts undefined:
-        // move it into the layouts the render pass expects once.
-        transition(command_buffer, target->color, VK_IMAGE_LAYOUT_UNDEFINED,
-                   VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL);
-        transition(command_buffer, target->depth, VK_IMAGE_LAYOUT_UNDEFINED,
-                   VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL, depth_aspect());
-        target->initialized = true;
-    }
+    initialize_layouts(command_buffer, *target);
+    // A pass that clears all of the colour first has nothing to keep.
+    if (target->msaa_stale && (overwritten & 1u) == 0u) seed_multisampled(command_buffer, *target);
+    target->msaa_stale = false;
     VkRenderPassBeginInfo pass{VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO};
     pass.renderPass = discard_passes[overwritten & 3u] != VK_NULL_HANDLE ? discard_passes[overwritten & 3u] : render_pass;
     pass.framebuffer = target->framebuffer;
@@ -3859,9 +4142,13 @@ VulkanRenderer::Impl::Texture VulkanRenderer::Impl::create_texture(std::uint32_t
 VulkanRenderer::Impl::Texture VulkanRenderer::Impl::create_texture_image(std::uint32_t width, std::uint32_t height) {
     Texture texture{};
     std::string error;
+    // With mips, each level is blitted from the one before (generate_mips).
+    const std::uint32_t levels = texture_levels(width, height);
     if (!create_image(width, height, VK_FORMAT_R8G8B8A8_UNORM,
-                      VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT, texture.image, texture.memory,
-                      texture.view, VK_IMAGE_ASPECT_COLOR_BIT, error))
+                      VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT |
+                          (levels > 1u ? VK_IMAGE_USAGE_TRANSFER_SRC_BIT : 0u),
+                      texture.image, texture.memory, texture.view, VK_IMAGE_ASPECT_COLOR_BIT, error,
+                      VK_SAMPLE_COUNT_1_BIT, levels))
         return texture;
     VkDescriptorSetAllocateInfo descriptor_info{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO};
     descriptor_info.descriptorPool = descriptor_pool;
@@ -3882,6 +4169,7 @@ VulkanRenderer::Impl::Texture VulkanRenderer::Impl::create_texture_image(std::ui
 void VulkanRenderer::Impl::upload_texture(VkImage image, std::uint32_t width, std::uint32_t height,
                                           const std::uint32_t *pixels) {
     const VkDeviceSize bytes = static_cast<VkDeviceSize>(width) * height * 4u;
+    const std::uint32_t levels = texture_levels(width, height);
     VkBuffer ring_buffer{};
     VkDeviceSize ring_offset = 0u;
     if (recording && async_uploads() && stage_upload(pixels, bytes, ring_buffer, ring_offset)) {
@@ -3891,7 +4179,8 @@ void VulkanRenderer::Impl::upload_texture(VkImage image, std::uint32_t width, st
             vkBeginCommandBuffer(frame_uploads, &begin);
             frame_uploads_open = true;
         }
-        transition(frame_uploads, image, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL);
+        transition(frame_uploads, image, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+                   VK_IMAGE_ASPECT_COLOR_BIT, 0u, levels);
         VkBufferImageCopy copy{};
         copy.bufferOffset = ring_offset;
         copy.imageSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0u, 0u, 1u};
@@ -3900,8 +4189,9 @@ void VulkanRenderer::Impl::upload_texture(VkImage image, std::uint32_t width, st
                                &copy);
         // The barrier's second scope covers the frame's commands, submitted
         // after these in the same batch.
-        transition(frame_uploads, image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
-                   VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+        if (levels > 1u) generate_mips(frame_uploads, image, width, height, levels);
+        else transition(frame_uploads, image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+                        VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
         ++frame_upload_count;
     } else {
     const bool reuse = reuse_buffers();
@@ -3959,13 +4249,15 @@ void VulkanRenderer::Impl::upload_texture(VkImage image, std::uint32_t width, st
     VkCommandBufferBeginInfo begin{VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO};
     begin.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
     vkBeginCommandBuffer(commands, &begin);
-    transition(commands, image, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL);
+    transition(commands, image, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+               VK_IMAGE_ASPECT_COLOR_BIT, 0u, levels);
     VkBufferImageCopy copy{};
     copy.imageSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0u, 0u, 1u};
     copy.imageExtent = {width, height, 1u};
     vkCmdCopyBufferToImage(commands, staging, image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1u, &copy);
-    transition(commands, image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
-               VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+    if (levels > 1u) generate_mips(commands, image, width, height, levels);
+    else transition(commands, image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+                    VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
     vkEndCommandBuffer(commands);
     VkSubmitInfo submit{VK_STRUCTURE_TYPE_SUBMIT_INFO};
     submit.commandBufferCount = 1u;
@@ -4935,7 +5227,7 @@ VkPipeline VulkanRenderer::Impl::create_pipeline(const PipelineKey &key) const {
     raster.lineWidth = 1.0f;
 
     VkPipelineMultisampleStateCreateInfo multisample{VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO};
-    multisample.rasterizationSamples = VK_SAMPLE_COUNT_1_BIT;
+    multisample.rasterizationSamples = samples;
 
     VkPipelineDepthStencilStateCreateInfo depth{VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO};
     depth.depthTestEnable = key.depth_test ? VK_TRUE : VK_FALSE;
@@ -5355,8 +5647,8 @@ void VulkanRenderer::Impl::resize_targets(VkExtent2D extent) {
                            VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1u, &blit, VK_FILTER_LINEAR);
             transition(commands, target->color, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
                        VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL);
-            transition(commands, target->depth, VK_IMAGE_LAYOUT_UNDEFINED,
-                       VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL, depth_aspect());
+            initialize_attachments(commands, *target);
+            target->msaa_stale = multisampled();
             target->initialized = true;
         }
     });
@@ -5731,8 +6023,7 @@ void VulkanRenderer::upload_frame(std::uint32_t display_address, const std::uint
                     target->initialized ? VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL : VK_IMAGE_LAYOUT_UNDEFINED,
                     VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL);
     if (!target->initialized) {
-        impl.transition(impl.command_buffer, target->depth, VK_IMAGE_LAYOUT_UNDEFINED,
-                        VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL, impl.depth_aspect());
+        impl.initialize_attachments(impl.command_buffer, *target);
         target->initialized = true;
     }
     VkImageBlit blit{};
@@ -5759,6 +6050,7 @@ void VulkanRenderer::upload_frame(std::uint32_t display_address, const std::uint
     }
     vkCmdBlitImage(impl.command_buffer, impl.upload_image, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, target->color,
                    VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1u, &blit, VK_FILTER_LINEAR);
+    target->msaa_stale = impl.multisampled();
     impl.transition(impl.command_buffer, target->color, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
                     VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL);
     impl.last_drawn_target = display_address;
@@ -8240,6 +8532,13 @@ void VulkanRenderer::shutdown() {
     vkDestroyShaderModule(impl.device, impl.fragment_shader, nullptr);
     for (VkFence fence : impl.present_fences) vkDestroyFence(impl.device, fence, nullptr);
     if (impl.present_timer != VK_NULL_HANDLE) vkDestroyQueryPool(impl.device, impl.present_timer, nullptr);
+    vkDestroyPipeline(impl.device, impl.seed_pipeline, nullptr);
+    vkDestroyPipelineLayout(impl.device, impl.seed_layout, nullptr);
+    vkDestroyDescriptorPool(impl.device, impl.seed_pool, nullptr);
+    vkDestroyDescriptorSetLayout(impl.device, impl.seed_set_layout, nullptr);
+    vkDestroyShaderModule(impl.device, impl.seed_vertex, nullptr);
+    vkDestroyShaderModule(impl.device, impl.seed_fragment, nullptr);
+    vkDestroyRenderPass(impl.device, impl.seed_pass, nullptr);
     vkDestroyRenderPass(impl.device, impl.render_pass, nullptr);
     for (VkRenderPass pass : impl.discard_passes)
         if (pass != VK_NULL_HANDLE) vkDestroyRenderPass(impl.device, pass, nullptr);

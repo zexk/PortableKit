@@ -200,6 +200,10 @@ public:
     [[nodiscard]] static settings::Aspect usable_aspect(settings::Aspect aspect) noexcept;
     void set_sharp_screen(bool sharp);
     void set_sharp_textures(bool sharp);
+    // What the renderer was built with (video.msaa, video.anisotropy, as far
+    // as the GPU allows them): 1 when off.
+    [[nodiscard]] std::uint32_t msaa_samples() const noexcept;
+    [[nodiscard]] std::uint32_t anisotropy() const noexcept;
     // Draws an installed HD texture pack's images instead of the game's own
     // textures (texture_pack.hpp). Takes effect from the next frame; off
     // draws exactly what no pack would.

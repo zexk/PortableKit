@@ -281,6 +281,28 @@ void Menu::video() {
         renderer().set_sharp_textures(s.sharp_textures);
         settings::save();
     }
+    // Both change how the renderer is built, so they apply at the next start.
+    const auto power_row = [&](const char *label, const char *key, std::uint32_t &value, int steps,
+                               std::uint32_t running, const char *description) {
+        int current = 0;
+        while (current + 1 < steps && (1u << (current + 1)) <= value) ++current;
+        RowOptions o = options_for(key, description);
+        // What the renderer runs with: the setting after a restart, or what
+        // the GPU allows of it.
+        if (o.note.empty() && value != running)
+            o.note = running <= 1u ? std::string("Now off") : "Now ×" + std::to_string(running);
+        const std::string text = current == 0 ? std::string("Off") : "×" + std::to_string(1u << current);
+        if (const int delta = choice_row(label, text, o)) {
+            value = 1u << cycle(current, delta, steps);
+            settings::save();
+        }
+    };
+    power_row("Anti-aliasing", "video.msaa", s.msaa, 4, renderer().msaa_samples(),
+              "Multisampling smooths the edges of the game's 3D shapes. More samples need more from the GPU and "
+              "its memory. Applies after a restart.");
+    power_row("Anisotropic filtering", "video.anisotropy", s.anisotropy, 5, renderer().anisotropy(),
+              "Keeps textures seen at a slant, such as floors and walls, sharp into the distance. Applies to the "
+              "smooth texture filter, after a restart.");
     {
         RowOptions o = options_for("video.texture_pack",
                                    std::string("Draws an HD texture pack in PPSSPP's format from textures/") +
@@ -426,6 +448,8 @@ void Menu::video() {
         restore("video.aspect", s.aspect, d.aspect);
         restore("video.sharp_screen", s.sharp_screen, d.sharp_screen);
         restore("video.sharp_textures", s.sharp_textures, d.sharp_textures);
+        restore("video.msaa", s.msaa, d.msaa);
+        restore("video.anisotropy", s.anisotropy, d.anisotropy);
         restore("video.texture_pack", s.texture_pack, d.texture_pack);
         restore("video.present_mode", s.present_mode, d.present_mode);
         restore("video.frame_rate", s.frame_rate, d.frame_rate);

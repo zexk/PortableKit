@@ -317,13 +317,11 @@ function(portablekit_add_game target)
                 "kGeCheckVertexShader=GE_RAW_VERTICES,GE_CHECK_DECODE@${PORTABLEKIT_ROOT}/host/gpu/shaders/ge.vert"
                 "kGeFragmentShader=${PORTABLEKIT_ROOT}/host/gpu/shaders/ge.frag"
                 "kLevelVertexShader=${PORTABLEKIT_ROOT}/host/gpu/shaders/level.vert"
-                "kLevelFragmentShader=${PORTABLEKIT_ROOT}/host/gpu/shaders/level.frag")
-            if(ANDROID)
-                # Pre-rotation of the finished frame for a display turned sideways.
-                list(APPEND shaders
-                    "kRotateVertexShader=${PORTABLEKIT_ROOT}/host/gpu/shaders/rotate.vert"
-                    "kRotateFragmentShader=${PORTABLEKIT_ROOT}/host/gpu/shaders/rotate.frag")
-            endif()
+                "kLevelFragmentShader=${PORTABLEKIT_ROOT}/host/gpu/shaders/level.frag"
+                # Android's pre-rotation of the finished frame, and (unturned)
+                # the copy of a target into its multisampled image.
+                "kRotateVertexShader=${PORTABLEKIT_ROOT}/host/gpu/shaders/rotate.vert"
+                "kRotateFragmentShader=${PORTABLEKIT_ROOT}/host/gpu/shaders/rotate.frag")
             set(shader_sources ${shaders})
             list(TRANSFORM shader_sources REPLACE "^[A-Za-z]+=([A-Z_,]+@)?" "")
             list(REMOVE_DUPLICATES shader_sources)
