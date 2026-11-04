@@ -93,7 +93,8 @@ Row row(const char *label, const RowOptions &options, ImU32 color = colors::kTex
     if (result.focused || (result.hovered && Layer::get().description().empty())) {
         std::string description = options.description;
         if (!options.note.empty()) description += (description.empty() ? "" : "\n") + options.note;
-        Layer::get().set_description(description);
+        // A row with nothing to say leaves the screen's own description.
+        if (!description.empty()) Layer::get().set_description(description);
     }
     return result;
 }
@@ -693,6 +694,7 @@ void hints(std::initializer_list<Hint> list) {
             break;
         case Control::Shift: x += draw_face(draw, {x, at.y}, SDL_GAMEPAD_BUTTON_WEST) + gap; break;
         case Control::Symbols: cap(select_name()); break;
+        case Control::Quit: cap(pad ? select_name() : "Ctrl+Q"); break;
         case Control::Cursor:
             if (pad) {
                 cap(shoulder_name(false));

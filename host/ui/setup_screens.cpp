@@ -74,6 +74,7 @@ private:
     // A file dropped onto the welcome screen skips the browser.
     std::optional<fs::path> dropped_;
     fs::path data_dir_;
+    bool quit_ = false;  // asked for in the file browser
 
     // Progress, written by the worker thread in progress().
     std::mutex mutex_;
@@ -86,6 +87,10 @@ private:
 
 bool SetupScreens::introduce(const fs::path &data_dir) {
     data_dir_ = data_dir;
+#if !defined(PORTABLEKIT_ANDROID_APP)
+    // The file browser is the first screen; it says what to choose.
+    return !quit_;
+#endif
     Layer &layer = Layer::get();
     layer.set_interactive(true);
     bool first = true;
@@ -104,36 +109,11 @@ bool SetupScreens::introduce(const fs::path &data_dir) {
             begin_panel("##welcome", std::string("Welcome to ") + portablekit::game().project_name, kSubtitle, false);
             begin_content();
             ImGui::Dummy({0.0f, font() * 0.3f});
-            paragraph(std::string(portablekit::game().project_name) + " plays " + portablekit::game().game_title +
-                      " from your own copy of the game. It needs the disc image of the game's PSP disc, " +
-                      portablekit::game().disc_id_display + ", as an .iso file: the PlayStation 3 release carries it.");
-            ImGui::Dummy({0.0f, font() * 0.4f});
-#if defined(PORTABLEKIT_ANDROID_APP)
-            paragraph(std::string("Choose the image next, in Android's file picker. ") + portablekit::game().project_name + " copies it into its own storage (an "
-                      "app cannot keep reading a file elsewhere), checks that it is the right release and prepares "
-                      "the game from it. The copy needs as much free space as the image takes; once it is made, the "
-                      "original can be deleted. Nothing is downloaded.",
-                      colors::kTextDim);
-#else
-            paragraph(std::string("Choose the image next. ") + portablekit::game().project_name + " checks that it is the right release, prepares the game from it "
-                      "and, unless you choose otherwise, copies it into its data folder so the game keeps working if "
-                      "the original is moved or deleted. Nothing is downloaded.",
-                      colors::kTextDim);
-#endif
-            ImGui::Dummy({0.0f, font() * 0.4f});
-            section("Data folder");
-            ImGui::Indent(std::round(16.0f * layer.scale()));
-            paragraph(install::path_to_utf8(data_dir), colors::kTextDim);
-            ImGui::Unindent(std::round(16.0f * layer.scale()));
+            paragraph(std::string("Choose your .iso of ") + portablekit::game().game_title + " (" +
+                      portablekit::game().disc_id_display + ").");
             ImGui::Dummy({0.0f, font() * 0.6f});
             answer = button_pair("Choose disc image", "Quit", first);
             first = false;
-#if !defined(PORTABLEKIT_ANDROID_APP)
-            ImGui::Dummy({0.0f, font() * 0.4f});
-            paragraph("You can also drop the .iso file onto this window.", colors::kTextDim);
-#endif
-            layer.set_description(std::string(portablekit::game().game_title) + " (" + portablekit::game().disc_id_display +
-                                  ") is the only release supported.");
             begin_footer();
             hints({{Control::Confirm, "Select"}, {Control::Back, "Quit"}});
             end_panel();
@@ -186,16 +166,21 @@ std::optional<fs::path> SetupScreens::choose_image() {
             const bool back = layer.take_back();
             const ImGuiKey cancel = layer.confirm_south() ? ImGuiKey_GamepadFaceRight : ImGuiKey_GamepadFaceDown;
             const bool pad_back = ImGui::IsKeyPressed(cancel, false);
-            begin_panel("##browser", "Choose the disc image", kSubtitle, false);
+            if (ImGui::IsKeyPressed(ImGuiKey_GamepadBack, false) || ImGui::IsKeyChordPressed(ImGuiMod_Ctrl | ImGuiKey_Q)) {
+                quit_ = true;
+                return false;
+            }
+            begin_panel("##browser", std::string("Welcome to ") + portablekit::game().project_name, kSubtitle, false);
             begin_content();
+            layer.set_description(std::string("Choose or drop your .iso of ") + portablekit::game().game_title + " (" +
+                                  portablekit::game().disc_id_display + ").");
             const FileBrowser::Result result = browser.frame(back || pad_back);
-            layer.set_description(std::string("Look for the .iso image of ") + portablekit::game().disc_id_display +
-                                  ". Removable drives and SD cards are listed next to Home.");
             begin_footer();
             if (layer.input_device() == InputDevice::Gamepad)
-                hints({{Control::Confirm, "Open"}, {Control::Back, "Up a folder"}, {Control::Toggle, "All files"}});
+                hints({{Control::Confirm, "Open"}, {Control::Back, "Up a folder"}, {Control::Toggle, "All files"},
+                       {Control::Quit, "Quit"}});
             else
-                hints({{Control::Confirm, "Open"}, {Control::Back, "Up a folder"}});
+                hints({{Control::Confirm, "Open"}, {Control::Back, "Up a folder"}, {Control::Quit, "Quit"}});
             end_panel();
             if (result == FileBrowser::Result::Chosen) chosen = browser.chosen();
             return result == FileBrowser::Result::Browsing;
@@ -210,7 +195,7 @@ std::optional<fs::path> SetupScreens::choose_image() {
 }
 #endif
 
-std::optional<install::ImageStorage> SetupScreens::choose_storage(const fs::path &image,
+std::optional<install::ImageStorage> SetupScreens::choose_storage([[maybe_unused]] const fs::path &image,
                                                                   const install::ImageInfo &info,
                                                                   const fs::path &data_dir) {
 #if defined(PORTABLEKIT_ANDROID_APP)
@@ -233,38 +218,28 @@ std::optional<install::ImageStorage> SetupScreens::choose_storage(const fs::path
             if (ImGui::IsKeyPressed(cancel, false)) return false;
             begin_panel("##storage", "Disc image found", kSubtitle, false);
             begin_content();
-            paragraph(std::string(portablekit::game().game_title) + " (" + portablekit::game().disc_id_display + "), " +
-                          human_size(info.size_bytes) + ". It passed its checks.",
+            paragraph(std::string(portablekit::game().game_title) + " (" + portablekit::game().disc_id_display + ") verified.",
                       colors::kGood);
-            ImGui::Dummy({0.0f, font() * 0.2f});
-            paragraph(install::path_to_utf8(image), colors::kTextDim);
             ImGui::Dummy({0.0f, font() * 0.6f});
-            heading("Keep a copy, or use the image where it is?");
 
-            std::string copy_note = "Recommended. The game keeps working if the original is moved or deleted. Needs " +
-                                    human_size(needed);
-            if (space) copy_note += "; " + human_size(*space) + " free";
+            std::string copy_note = "Needs " + human_size(needed);
+            if (space) copy_note += ", " + human_size(*space) + " free";
             copy_note += ".";
-            if (!room) copy_note = "Not enough free space: the copy needs " + human_size(needed) + " and " +
-                                   human_size(*space) + " is free in the data folder.";
+            if (!room) copy_note = "Not enough space: needs " + human_size(needed) + ", " + human_size(*space) + " free.";
             RowOptions copy_options{!room, {}, {}};
             if (first && room) focus_next_row();
-            if (button_row((std::string("Copy it into ") + portablekit::game().project_name + "'s data folder").c_str(), copy_options)) choice = install::ImageStorage::Copy;
+            if (button_row("Copy (recommended)", copy_options)) choice = install::ImageStorage::Copy;
             ImGui::Indent(std::round(16.0f * layer.scale()));
             paragraph(copy_note, room ? colors::kTextDim : colors::kDanger);
             ImGui::Unindent(std::round(16.0f * layer.scale()));
             ImGui::Dummy({0.0f, font() * 0.4f});
-            const std::string place_note =
-                "Saves " + human_size(info.size_bytes) + ". The image must then stay where it is; if it moves, " +
-                std::string(portablekit::game().project_name) + " asks you to set up again.";
+            const std::string place_note = "The image must stay where it is.";
             if (first && !room) focus_next_row();
             if (button_row("Use it where it is")) choice = install::ImageStorage::InPlace;
             ImGui::Indent(std::round(16.0f * layer.scale()));
             paragraph(place_note, colors::kTextDim);
             ImGui::Unindent(std::round(16.0f * layer.scale()));
             first = false;
-            layer.set_description(std::string("Either way, the game's executable is prepared from the image into ") + portablekit::game().project_name + "'s data "
-                                  "folder.");
             begin_footer();
             hints({{Control::Confirm, "Continue"}, {Control::Back, "Choose another file"}});
             end_panel();
@@ -341,7 +316,6 @@ void SetupScreens::run_task(const std::string &title, const std::function<void()
             if (first) focus_next_row();
             first = false;
             if (big_button(cancel_ ? "Cancelling…" : "Cancel", width, false, cancel_)) cancel_ = true;
-            layer.set_description("Cancelling removes everything this step has written so far.");
             begin_footer();
             hints({{Control::Back, "Cancel"}});
             end_panel();
@@ -388,8 +362,6 @@ bool SetupScreens::offer_retry(const std::string &message) {
             ImGui::Dummy({0.0f, font() * 0.8f});
             answer = button_pair("Choose another file", "Quit", first);
             first = false;
-            layer.set_description(std::string(portablekit::game().project_name) + " supports only " + portablekit::game().game_title + ", " +
-                                  portablekit::game().disc_id_display + ", as an unmodified, uncompressed .iso image.");
             begin_footer();
             hints({{Control::Confirm, "Select"}, {Control::Back, "Quit"}});
             end_panel();
@@ -399,32 +371,19 @@ bool SetupScreens::offer_retry(const std::string &message) {
     return window_open && answer == 1;
 }
 
-void SetupScreens::finished(const fs::path &data_dir) {
+void SetupScreens::finished(const fs::path &) {
     Layer &layer = Layer::get();
     bool first = true;
     layer.run(
         [&] {
-            begin_panel("##done", "All set", kSubtitle, false);
+            begin_panel("##done", "Ready", kSubtitle, false);
             begin_content();
             ImGui::Dummy({0.0f, font() * 0.5f});
-            paragraph("The game is ready. Later starts go straight to it.", colors::kGood);
-            ImGui::Dummy({0.0f, font() * 0.3f});
 #if defined(PORTABLEKIT_ANDROID_APP)
-            paragraph("In the game, Back, the menu button at the top of the touch controls, or L3+R3 on a gamepad "
-                      "(both sticks pressed) opens " + std::string(portablekit::game().project_name) +
-                          "'s menu, with the settings and the way back to this setup. "
-                      "Touch the screen to show the touch controls.",
-                      colors::kTextDim);
+            paragraph("Back, the top touch button or L3+R3 opens the menu.", colors::kTextDim);
 #else
-            paragraph(std::string("In the game, Esc or L3+R3 (both sticks pressed) opens ") + portablekit::game().project_name + "'s menu, with the settings and the "
-                      "way back to this setup.",
-                      colors::kTextDim);
+            paragraph("Esc or L3+R3 opens the menu.", colors::kTextDim);
 #endif
-            ImGui::Dummy({0.0f, font() * 0.3f});
-            section("Data folder");
-            ImGui::Indent(std::round(16.0f * layer.scale()));
-            paragraph(install::path_to_utf8(data_dir), colors::kTextDim);
-            ImGui::Unindent(std::round(16.0f * layer.scale()));
             ImGui::Dummy({0.0f, font() * 0.8f});
             if (first) focus_next_row();
             first = false;
