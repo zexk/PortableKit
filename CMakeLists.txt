@@ -57,6 +57,14 @@ set_property(CACHE PSPRECOMP_GENERATED_OPT_LEVEL PROPERTY STRINGS 0 1 2 3)
 if(NOT PSPRECOMP_GENERATED_OPT_LEVEL MATCHES "^[0-3]$")
     message(FATAL_ERROR "PSPRECOMP_GENERATED_OPT_LEVEL must be 0, 1, 2 or 3")
 endif()
+# Module (overlay) corpora are large and run less of the time than the main
+# executable's: size by default (s; MSVC /O1).
+set(PSPRECOMP_OVERLAY_OPT_LEVEL "s" CACHE STRING
+    "Optimization level for generated module units (0, 1, 2, 3 or s)")
+set_property(CACHE PSPRECOMP_OVERLAY_OPT_LEVEL PROPERTY STRINGS 0 1 2 3 s)
+if(NOT PSPRECOMP_OVERLAY_OPT_LEVEL MATCHES "^[0-3s]$")
+    message(FATAL_ERROR "PSPRECOMP_OVERLAY_OPT_LEVEL must be 0, 1, 2, 3 or s")
+endif()
 
 option(PSPRECOMP_LTO "Enable link-time/whole-program optimization" OFF)
 option(PSPRECOMP_NATIVE_AVX2 "Use AVX2 code generation for optimized MSVC builds" OFF)

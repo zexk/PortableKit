@@ -1609,7 +1609,8 @@ int generate_auto(const std::filesystem::path &elf_path,
                   std::uint32_t load_base,
                   std::uint32_t unit_span_bytes,
                   bool chain_units = true,
-                  const std::vector<psprecomp::ExecutableRange> &extra_code_ranges = {}) {
+                  const std::vector<psprecomp::ExecutableRange> &extra_code_ranges = {},
+                  bool compact = false) {
     const auto started = std::chrono::steady_clock::now();
     // Progress goes to stderr and is flushed per line so `tail -f` on a log
     // shows how far a long generation has advanced.
@@ -1639,11 +1640,28 @@ int generate_auto(const std::filesystem::path &elf_path,
     // jump (switch tables, virtual calls, overlay trampolines), so control can
     // arrive at an address the CFG walk never reached; anything not emitted
     // would stop the runtime. Words that are data decode to a trap instead.
+    //
+    // --compact instead emits only what the analysis reached (with delay
+    // slots) and makes only its function entries and block/return
+    // continuations dispatcher entries. Anything else that control reaches,
+    // such as an unresolved computed jump's target, runs in the interpreter
+    // until it arrives at an entry. Module corpora use it: data decoded as
+    // code, and an entry per word, multiplied their size several times.
     std::set<std::uint32_t> emitted_pcs;
-    for (const auto &range : program.executable_ranges) {
-        for (std::uint32_t pc = range.start; pc + 4u <= range.end; pc += 4u) emitted_pcs.insert(pc);
+    std::set<std::uint32_t> compact_entries;
+    if (compact) {
+        for (const auto pc : program.covered_labels) {
+            emitted_pcs.insert(pc);
+            if (psprecomp::decode_allegrex(memory.load32(pc)).has_delay_slot()) emitted_pcs.insert(pc + 4u);
+        }
+        for (const auto pc : program.covered_entry_labels)
+            if (emitted_pcs.contains(pc)) compact_entries.insert(pc);
+    } else {
+        for (const auto &range : program.executable_ranges) {
+            for (std::uint32_t pc = range.start; pc + 4u <= range.end; pc += 4u) emitted_pcs.insert(pc);
+        }
     }
-    const std::set<std::uint32_t> &global_entries = emitted_pcs;
+    const std::set<std::uint32_t> &global_entries = compact ? compact_entries : emitted_pcs;
 
     struct Unit {
         std::uint32_t bucket{};
@@ -1833,8 +1851,13 @@ int main(int argc, char **argv) {
         if (argc >= 4 && std::string_view(argv[2]) == "--auto") {
             std::vector<std::string> positional;
             std::vector<psprecomp::ExecutableRange> extra_code;
+            bool compact = false;
             for (int i = 4; i < argc; ++i) {
                 const std::string_view option(argv[i]);
+                if (option == "--compact") {
+                    compact = true;
+                    continue;
+                }
                 // A prefixed corpus (an overlay) gets its own symbol names and
                 // stays out of the main executable's fast unit table.
                 if (option == "--prefix" && i + 1 < argc) {
@@ -1861,17 +1884,17 @@ int main(int argc, char **argv) {
                 : 0x4000u;
             if (positional.size() > 2u) {
                 std::cerr << "Usage: psp_recomp <ELF> --auto <generated_dir> [load_base_hex] [unit_span_bytes]"
-                          << " [--prefix <symbol_prefix>] [--code START-END ...]\n";
+                          << " [--prefix <symbol_prefix>] [--code START-END ...] [--compact]\n";
                 return 2;
             }
             if (unit_span == 0u || (unit_span & 3u) != 0u) throw psprecomp::Error("unit_span_bytes must be non-zero and 4-byte aligned");
-            return generate_auto(argv[1], argv[3], load_base, unit_span, g_symbol_prefix == "recomp", extra_code);
+            return generate_auto(argv[1], argv[3], load_base, unit_span, g_symbol_prefix == "recomp", extra_code, compact);
         }
         if (argc == 4) return generate_manual(argv[1], argv[2], argv[3]);
         std::cerr << "Usage:\n"
                   << "  psp_recomp <ELF> <functions.csv> <generated_manifest.cpp>\n"
                   << "  psp_recomp <ELF> --auto <generated_dir> [load_base_hex] [unit_span_bytes]"
-                  << " [--prefix <symbol_prefix>] [--code START-END ...]\n";
+                  << " [--prefix <symbol_prefix>] [--code START-END ...] [--compact]\n";
         return 2;
     } catch (const std::exception &e) {
         std::cerr << "psp_recomp error: " << e.what() << "\n";
