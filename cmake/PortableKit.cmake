@@ -467,6 +467,11 @@ inline constexpr const char *kBuildLabel = \"${PORTABLEKIT_BUILD_LABEL}\";
     # The overlay libraries resolve psprecomp and runtime symbols against the
     # executable that loads them, so it has to export them.
     set_target_properties(${target} PROPERTIES ENABLE_EXPORTS TRUE WINDOWS_EXPORT_ALL_SYMBOLS TRUE)
+    if(MINGW)
+        # WINDOWS_EXPORT_ALL_SYMBOLS only covers MSVC-style linkers; MinGW
+        # executables export nothing (and get no import library) without this.
+        target_link_options(${target} PRIVATE -Wl,--export-all-symbols)
+    endif()
 
     # The NID table is compiled in, so the program reads nothing from the
     # checkout it was built in. A profile may add its own rows in
