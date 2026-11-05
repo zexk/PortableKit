@@ -5,6 +5,9 @@ cmake_minimum_required(VERSION 3.20)
 # change is checked with.
 if(CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR)
     project(PortableKit VERSION 0.1.0 LANGUAGES CXX)
+    set(_portablekit_tests_default ON)
+else()
+    set(_portablekit_tests_default OFF)
 endif()
 
 set(CMAKE_CXX_STANDARD 20)
@@ -49,7 +52,7 @@ if(NOT PSPRECOMP_GENERATED_JOBS MATCHES "^[1-9][0-9]*$")
 endif()
 set_property(GLOBAL APPEND PROPERTY JOB_POOLS psprecomp_generated=${PSPRECOMP_GENERATED_JOBS})
 
-option(PSPRECOMP_BUILD_TESTS "Build reusable PSPRecomp tests" ON)
+option(PSPRECOMP_BUILD_TESTS "Build reusable PSPRecomp tests" ${_portablekit_tests_default})
 
 set(PSPRECOMP_GENERATED_OPT_LEVEL "2" CACHE STRING
     "Optimization level for generated AOT units (0, 1, 2 or 3)")

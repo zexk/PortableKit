@@ -12,7 +12,11 @@ cmake --build out -j2
 ctest --test-dir out
 ```
 
-Minutes, and no game data. It builds `psp_analyze`, `psp_recomp`, `dump_function`, the runtime, and the tests that need no game. It does **not** compile `host/main.cpp` or most of `host/`: those are a game's target, so build a port too before calling a system-layer change done.
+Minutes, and no game data. It builds `psp_analyze`, `psp_recomp`, `dump_function`,
+the runtime, and the tests that need no game. The `portablekit_host_check`
+target also compiles and links the backend-independent host against a stand-in
+profile. The renderer and interface still need a port build before calling a
+system-layer change done.
 
 ## A port
 
@@ -24,6 +28,12 @@ cd <Port>
 cmake -S . -B out -G Ninja
 cmake --build out -j2
 ```
+
+Framework tests default off when PortableKit is added as a subdirectory, so
+each edition builds its game without also compiling and linking the test
+programs and two extra copies of the host layer. To include them, configure
+with `-DPSPRECOMP_BUILD_TESTS=ON`. Existing build directories retain their
+cached setting; use `-DPSPRECOMP_BUILD_TESTS=OFF` to opt out there.
 
 Five stages, and only the last two are slow:
 
@@ -65,6 +75,7 @@ Measured on an Apple M1 with 8 GB, from a fresh clone with an empty compiler cac
 | --- | --- | --- |
 | `PSPRECOMP_GENERATED_OPT_LEVEL` | `2` | Optimisation level for generated units. `0` compiles much faster and runs much slower |
 | `PSPRECOMP_GENERATED_JOBS` | memory / 4 GiB | How many generated units compile at once |
+| `PSPRECOMP_BUILD_TESTS` | `ON` standalone, `OFF` in a port | Build framework tests and host compile checks |
 | `PORTABLEKIT_RENDERER` | `ON` | Build the Vulkan renderer. Off gives a headless build |
 | `PORTABLEKIT_FFMPEG` | `bundled` | `bundled` builds FFmpeg with the project, `system` uses one found through pkg-config, `OFF` drops music and movies |
 | `PORTABLEKIT_RELEASE` | `OFF` | Build for distribution: no paths into the checkout, libraries from `lib/` next to the executable |
