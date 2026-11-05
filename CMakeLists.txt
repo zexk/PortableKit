@@ -209,6 +209,14 @@ if(PSPRECOMP_BUILD_TESTS)
     target_compile_definitions(psprecomp_tests PRIVATE
         PSPRECOMP_CODEGEN_PATH="$<TARGET_FILE:psp_recomp>")
     add_test(NAME psprecomp_tests COMMAND psprecomp_tests)
+    if(UNIX AND NOT CMAKE_CROSSCOMPILING AND CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+        find_package(Python3 COMPONENTS Interpreter QUIET)
+        if(Python3_Interpreter_FOUND)
+            add_test(NAME portablekit_codegen_registration
+                COMMAND "${Python3_EXECUTABLE}" "${PORTABLEKIT_ROOT}/tests/codegen_registration_test.py"
+                        "$<TARGET_FILE:psp_recomp>" "${CMAKE_CXX_COMPILER}")
+        endif()
+    endif()
 endif()
 
 # Save-data checks that need no game data: crypto test vectors and round trips,

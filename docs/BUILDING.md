@@ -75,3 +75,26 @@ Measured on an Apple M1 with 8 GB, from a fresh clone with an empty compiler cac
 ## Dependencies
 
 SDL3, Vulkan and `glslangValidator` for the renderer; without them the build says so and produces a headless port. FFmpeg for music and movies, built by the project unless you ask otherwise. `ccache` if you have it. Python 3 for the build's own scripts.
+
+### Generated registration size
+
+Automatic corpora register each unit's entry addresses from a constant array
+and one loop. This keeps the same entry order, function pointers and chainable
+names, without asking the compiler to optimize thousands of repeated calls.
+Regenerate existing corpora to get this change; runtime ABI stays unchanged.
+
+On Linux x86-64 with GCC 16.2, compiling the median-sized source unit from
+Portable Ops' main corpus (`-O2`) and the pooled Portable Ops and Portable
+Ops+ module corpora (`-Os`) gave these samples, with the compiler cache bypassed:
+
+| Unit | Compile before / after | Object bytes before / after |
+| --- | --- | --- |
+| Main | 17.56 / 15.61 seconds | 819,960 / 639,080 |
+| Module | 4.02 / 3.72 seconds | 180,144 / 123,944 |
+| Plus module | 9.54 / 8.58 seconds | 266,200 / 187,696 |
+
+These are individual compile samples with other builds running, not full-build
+or gameplay benchmarks. Generated game data is not part of this repository.
+The `portablekit_codegen_registration` CTest compiles and runs registration
+from a synthetic ELF, for both a main corpus and a compact overlay. It needs
+Python 3 and a native GCC-compatible compiler on Unix.

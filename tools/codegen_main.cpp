@@ -1774,12 +1774,16 @@ int generate_auto(const std::filesystem::path &elf_path,
                 << "u, &" << generated_unit.name << ", &"
                 << generated_unit_cpp_entry_name(unit.bucket) << ");\n";
         }
-        for (const auto label : unit.entries) {
-            // The runtime treats names starting with recomp_unit_ as chainable.
-            out << "    runtime.register_function(" << psprecomp::hex32(label) << "u, &"
-                << generated_unit.name << ", \"recomp_unit_" << generated_unit.name << "\");\n";
-            ++registered_entries;
-        }
+        // One call site instead of thousands of identical statements keeps
+        // registration cheap to compile and small in every linked module.
+        out << "    static const std::uint32_t entries[] = {\n";
+        for (const auto label : unit.entries)
+            out << "        " << psprecomp::hex32(label) << "u,\n";
+        // The runtime treats names starting with recomp_unit_ as chainable.
+        out << "    };\n    for (const auto address : entries)\n"
+            << "        runtime.register_function(address, &" << generated_unit.name
+            << ", \"recomp_unit_" << generated_unit.name << "\");\n";
+        registered_entries += unit.entries.size();
         out << "}\n} // namespace psprecomp\n";
         rewritten_units += write_text_if_changed(path, out.str()) ? 1u : 0u;
         progress("unit " + std::to_string(unit_number) + "/" + std::to_string(units.size()) + " written");
