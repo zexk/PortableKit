@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """Compile and run synthetic main/overlay registration, including sparse entries.
 
-Usage: python3 tests/codegen_registration_test.py out/psp_recomp c++
-Requires a native GCC-compatible C++ compiler; no game data.
+Usage: python3 tests/codegen_registration_test.py out/psp_recomp c++ [cmake]
+Requires CMake and a native GCC-compatible C++ compiler on Unix; no game data.
 """
 import pathlib
 import struct
@@ -13,7 +13,7 @@ import tempfile
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 
 
-def check(recompiler, compiler):
+def check(recompiler, compiler, cmake='cmake'):
     with tempfile.TemporaryDirectory(prefix='portablekit-registration-') as directory:
         root = pathlib.Path(directory)
         # Two reachable return blocks, separated by unreachable words. The
@@ -30,15 +30,48 @@ def check(recompiler, compiler):
         elf.write_bytes(image)
         for compact in (False, True):
             generated = root / ('compact' if compact else 'full')
-            prefix = 'overlay' if compact else 'recomp'
-            registry = 'register_overlay_functions' if compact else 'register_generated_functions'
+            prefix = 'compact' if compact else 'recomp'
+            registry = 'register_compact_functions' if compact else 'register_generated_functions'
             subprocess.run([recompiler, str(elf), '--auto', str(generated),
                             '0x08804000', '16', '--prefix', prefix] +
                            (['--compact'] if compact else []), check=True, capture_output=True)
+            sources = sorted(generated.glob('*.cpp'))
+            load = ''
+            arguments = []
+            if compact:
+                # No host target exists. Building this module must not build
+                # or link a host, and loading it must need no host exports.
+                (generated / 'meta.txt').write_text(
+                    'base=0x08804000\nsize=32\ncode_size=32\nhash=0x1\nname=fixture\n')
+                (root / 'CMakeLists.txt').write_text(f'''
+cmake_minimum_required(VERSION 3.20)
+project(OverlayCheck LANGUAGES CXX)
+include("{ROOT}/cmake/PortableKit.cmake")
+set(PSPRECOMP_OVERLAY_OPT_LEVEL s)
+_portablekit_add_overlay(UnbuiltHost "{generated}/meta.txt" "{root}/modules")
+if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+    target_link_options(overlay_compact PRIVATE "LINKER:--no-undefined")
+endif()
+file(GENERATE OUTPUT "${{CMAKE_BINARY_DIR}}/module-path" CONTENT "$<TARGET_FILE:overlay_compact>")
+''')
+                build = root / 'build'
+                subprocess.run([cmake, '-S', str(root), '-B', str(build),
+                                '-DCMAKE_CXX_COMPILER=' + compiler], check=True, capture_output=True)
+                subprocess.run([cmake, '--build', str(build), '--target', 'overlay_compact', '-j2'],
+                               check=True, capture_output=True)
+                arguments = [(build / 'module-path').read_text()]
+                sources = []
+                load = '''void *module = dlopen(argv[1], RTLD_NOW | RTLD_LOCAL);
+    if (!module) { std::fprintf(stderr, "%s\\n", dlerror()); return 1; }
+    const auto register_all = reinterpret_cast<void (*)(CorpusRuntime &)>(
+        dlsym(module, "portablekit_register_overlay"));
+    assert(register_all != nullptr);'''
+                registry = 'register_all'
             runner = root / 'runner.cpp'
             runner.write_text('''#include "psprecomp/corpus_abi.hpp"
 #include <cassert>
 #include <cstdio>
+#include <dlfcn.h>
 using namespace psprecomp;
 namespace psprecomp { void REGISTRY(CorpusRuntime &); }
 static void record(CorpusRuntime &, std::uint32_t pc, CorpusFunction function, const char *name) {
@@ -52,19 +85,20 @@ static void unit(CorpusRuntime &, std::uint32_t, std::uint32_t, std::uint32_t,
 struct Host : CorpusRuntime {
     Host(const CorpusHostApi *api) : CorpusRuntime(api, nullptr) {}
 };
-int main() {
+int main(int, char **argv) {
     CorpusHostApi api{};
     api.register_function = record;
     api.register_unit = unit;
     Host host(&api);
+    LOAD
     REGISTRY(host);
 }
-'''.replace('REGISTRY', registry))
+'''.replace('REGISTRY', registry).replace('LOAD', load))
             executable = root / 'registration'
             subprocess.run([compiler, '-std=c++20', '-O2', '-I' + str(ROOT / 'include'),
-                            *map(str, sorted(generated.glob('*.cpp'))), str(runner),
-                            '-o', str(executable)], check=True)
-            actual = subprocess.check_output([str(executable)], text=True).splitlines()
+                            *map(str, sources), str(runner),
+                            '-o', str(executable)] + (['-ldl'] if sys.platform == 'linux' else []), check=True)
+            actual = subprocess.check_output([str(executable), *arguments], text=True).splitlines()
             offsets = (0, 8, 16) if compact else range(0, 32, 4)
             expected = [f'{0x08804000 + offset:08X} recomp_unit_{prefix}_unit_{offset // 16:04d}'
                         for offset in offsets]
@@ -73,4 +107,10 @@ int main() {
 
 
 if __name__ == '__main__':
-    check(*sys.argv[1:])
+    try:
+        check(*sys.argv[1:])
+    except subprocess.CalledProcessError as error:
+        for output in (error.stdout, error.stderr):
+            if output:
+                sys.stderr.write(output.decode() if isinstance(output, bytes) else output)
+        raise

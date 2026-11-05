@@ -158,8 +158,6 @@ foreach(_extension_dir IN LISTS PORTABLEKIT_HLE_EXTENSION_DIRS)
 endforeach()
 
 # Keep the runtime as an object library so profile executables own its objects.
-# On Windows this also lets WINDOWS_EXPORT_ALL_SYMBOLS include runtime symbols
-# in the executable's import library for separately linked overlay modules.
 add_library(psprecomp_core OBJECT
     "${PORTABLEKIT_ROOT}/src/decoder.cpp"
     "${PORTABLEKIT_ROOT}/src/extra_instructions.cpp"
@@ -217,7 +215,7 @@ if(PSPRECOMP_BUILD_TESTS)
         if(Python3_Interpreter_FOUND)
             add_test(NAME portablekit_codegen_registration
                 COMMAND "${Python3_EXECUTABLE}" "${PORTABLEKIT_ROOT}/tests/codegen_registration_test.py"
-                        "$<TARGET_FILE:psp_recomp>" "${CMAKE_CXX_COMPILER}")
+                        "$<TARGET_FILE:psp_recomp>" "${CMAKE_CXX_COMPILER}" "${CMAKE_COMMAND}")
         endif()
     endif()
 endif()

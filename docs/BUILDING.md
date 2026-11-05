@@ -47,6 +47,12 @@ Five stages, and only the last two are slow:
 
 A game with code overlays has a sixth stage: extract each overlay, recompile it, and build a shared library per overlay that the host loads at run time. How the overlays are extracted is the game's business, because the container they sit in is the game's own; the recompiling and the CMake target are the framework's (`tools/add_overlay.py`, and `portablekit_add_game()`).
 
+Overlay modules use the corpus ABI's function table. They build independently
+of the host executable: no executable import library, exported runtime symbols
+or host rebuild is needed to link them. Editing the host therefore does not
+relink every overlay on Windows or macOS. Older generated code that directly
+calls `Runtime` must be regenerated for the current corpus ABI.
+
 ### Where the time goes
 
 Measured on an Apple M1 with 8 GB, from a fresh clone with an empty compiler cache:

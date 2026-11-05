@@ -363,7 +363,7 @@ function(portablekit_add_game target)
     # The recompiled game code gets a target of its own. It needs only the
     # psprecomp headers, so definitions and include paths the host adds do not
     # change its compile commands and rebuild all of it. Its objects still link
-    # straight into the executable, which exports their symbols to the overlays.
+    # straight into the executable; overlays carry their own corpus objects.
     if(generated)
     add_library(${target}_generated OBJECT ${generated})
     # The standard is stated per target: a game's own CMakeLists is the top
@@ -464,14 +464,8 @@ inline constexpr const char *kBuildLabel = \"${PORTABLEKIT_BUILD_LABEL}\";
     endif()
     find_package(Threads REQUIRED)
     target_link_libraries(${target} PRIVATE Threads::Threads)
-    # The overlay libraries resolve psprecomp and runtime symbols against the
-    # executable that loads them, so it has to export them.
-    set_target_properties(${target} PROPERTIES ENABLE_EXPORTS TRUE WINDOWS_EXPORT_ALL_SYMBOLS TRUE)
-    if(MINGW)
-        # WINDOWS_EXPORT_ALL_SYMBOLS only covers MSVC-style linkers; MinGW
-        # executables export nothing (and get no import library) without this.
-        target_link_options(${target} PRIVATE -Wl,--export-all-symbols)
-    endif()
+    # Corpora call through CorpusHostApi, so the executable needs no exports
+    # or import library for separately built overlay modules.
 
     # The NID table is compiled in, so the program reads nothing from the
     # checkout it was built in. A profile may add its own rows in
@@ -655,7 +649,6 @@ function(_portablekit_add_overlay host_target meta_path output_dir)
         # of the runtime state the host already owns.
         target_include_directories(${library} PRIVATE "${PORTABLEKIT_ROOT}/host" "${PORTABLEKIT_ROOT}/include")
         if(MSVC)
-            target_compile_definitions(${library} PRIVATE PSPRECOMP_IMPORT_HOST_SYMBOLS=1)
             if(PSPRECOMP_OVERLAY_OPT_LEVEL STREQUAL "0")
                 target_compile_options(${library} PRIVATE /Od /bigobj)
             elseif(PSPRECOMP_OVERLAY_OPT_LEVEL STREQUAL "s")
@@ -671,21 +664,8 @@ function(_portablekit_add_overlay host_target meta_path output_dir)
             CXX_VISIBILITY_PRESET hidden
             VISIBILITY_INLINES_HIDDEN ON)
     endforeach()
-    if(WIN32 OR APPLE OR PORTABLEKIT_ANDROID_APP)
-        # Both linkers want the host binary while linking the module: MSVC for
-        # its import library, ld64 as the bundle loader. ELF leaves the host
-        # symbols undefined and resolves them when the module is loaded. In an
-        # Android app the host is libmain.so, which the app loads privately,
-        # so the module names it as a dependency to find its symbols.
-        target_link_libraries(${target} PRIVATE ${host_target})
-    else()
-        add_dependencies(${target} ${host_target})
-        if(ANDROID)
-            # The NDK links every shared library with --no-undefined; these
-            # leave the host's symbols to the loader like any other ELF.
-            target_link_options(${target} PRIVATE "LINKER:-z,undefs")
-        endif()
-    endif()
+    # The corpus ABI is a table of function pointers, not imported host
+    # symbols. Modules can build before the host and survive host-only relinks.
     if(PORTABLEKIT_RELEASE_LINK_OPTIONS)
         target_link_options(${target} PRIVATE ${PORTABLEKIT_RELEASE_LINK_OPTIONS})
     endif()
