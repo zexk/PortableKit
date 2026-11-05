@@ -115,3 +115,23 @@ or gameplay benchmarks. Generated game data is not part of this repository.
 The `portablekit_codegen_registration` CTest compiles and runs registration
 from a synthetic ELF, for both a main corpus and a compact overlay. It needs
 Python 3 and a native GCC-compatible compiler on Unix.
+
+Regenerating the complete Portable Ops main corpus preserved all 482,156 entry
+registrations and all code outside registration across 118 units. Its generated
+C++ fell from 129,972,829 to 94,315,233 bytes (27%). This comparison excludes
+headers and the JSON report.
+
+With llvm-mingw's x86-64 Clang, the same three sample objects fell from
+416,552 to 351,195 bytes, 99,230 to 89,968 bytes, and 166,527 to 153,493 bytes.
+Three alternating before/after runs gave median compiler CPU times of
+13.50 / 13.07, 1.97 / 1.91 and 3.17 / 3.34 seconds respectively. Size improved
+in all three; compile time did not improve uniformly.
+
+Removing host exports and the executable import library also reduced a
+Portable Ops+ Windows executable from 38,205,952 to 37,982,720 bytes when
+relinked from the same existing objects. The 1,350,976-byte import library is
+no longer needed. A real pooled Portable Ops module linked independently on
+Linux (with undefined symbols rejected) and llvm-mingw; the Windows DLL imports
+only system libraries. The synthetic registration check also loads its module
+into a host built without exported symbols. Windows execution, macOS and
+Android remain unverified.
