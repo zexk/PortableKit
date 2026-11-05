@@ -69,6 +69,12 @@ any remaining lost state from 14 minutes into seconds.
 
 The build now implements ranks 1 to 5 and the `generate.sh` fix from item 4.
 
+The corpus ABI has also removed the host dependency described in item 2:
+overlay modules now build without the executable, its exports or its import
+library. A host edit no longer triggers their relinks. The dependency graphs
+and migration estimates below retain the old arrangement as measured. See
+[Building](BUILDING.md) for current defaults and size measurements.
+
 | Mitigation | Where | Default | Turn off or tune |
 |---|---|---|---|
 | One Ninja per build directory (rank 1) | `cmake/BuildLock.cmake`, `cmake/ninja_locked.py.in` | on with a Ninja generator on macOS and Linux | `-DPSPRECOMP_BUILD_LOCK=OFF` |

@@ -515,10 +515,9 @@ inline constexpr const char *kBuildLabel = \"${PORTABLEKIT_BUILD_LABEL}\";
     elseif(CMAKE_SYSTEM_NAME STREQUAL "Linux")
         set_target_properties(${target} PROPERTIES BUILD_WITH_INSTALL_RPATH TRUE INSTALL_RPATH "$ORIGIN/lib")
         # The C++ runtime is linked in statically, so a build made against an
-        # old glibc runs wherever that glibc does, and its symbols stay
-        # private: the executable exports its own symbols to the overlay
-        # libraries, and a second, exported libstdc++ would clash with the
-        # system's one that the graphics driver loads.
+        # old glibc runs wherever that glibc does. Keep its symbols private
+        # in both executables and overlay libraries: an exported libstdc++
+        # would clash with the system's one that the graphics driver loads.
         set(PORTABLEKIT_RELEASE_LINK_OPTIONS
             -static-libstdc++ "LINKER:--exclude-libs,libstdc++.a:libsupc++.a" PARENT_SCOPE)
         target_link_options(${target} PRIVATE

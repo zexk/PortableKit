@@ -211,7 +211,7 @@ LocoRoco 2's corpus: 19 201 functions, 193 C++ units plus the registry and the a
 | The same -O0 compile while the game runs | 282 s + 282 s: **9.5 min** | |
 | Tiered (`--opt tiered`, 4 jobs): -O0, then -O2 from the same C++ | 201 s + 153 s: ready in **6 min** | + 1946 s: **38 min** in all |
 
-**Windows** (the maintainer's PC: Ryzen 5 5600, 12 threads, 16 GB, Windows 11; the trimmed llvm-mingw 20260922, clang 23, 6 jobs; the units only, recompiled on the Mac):
+**Windows** (the maintainer's PC: Ryzen 5 5600, 12 threads, 16 GB, Windows 11; the trimmed llvm-mingw 20260922, clang 23, 6 jobs; the units only, recompiled on the Mac). These measurements predate the corpus ABI below; current corpora need no executable import library:
 
 | Step | -O0 | -O2 |
 | --- | --- | --- |
@@ -242,7 +242,7 @@ So for this game on this machine:
 
 - **Use Apple's compiler; do not ship one.** It is free, it is what the program was built with (the corpus shares the program's C++ ABI and libc++ by construction), it is signed by Apple, and it is kept up to date by the system. Bundling a clang would add ~400 MB to the download and a second libc++ to reason about.
 - **Detection**: `xcode-select -p` answers without side effects; `xcrun --find clang++` then gives the compiler. Calling `xcrun` or `/usr/bin/clang++` without the tools opens the system's install prompt, so the app asks `xcode-select` first and says what to do: *"Compiling needs Apple's Command Line Tools, which are free. Install them with "xcode-select --install" ..."*. The window can run `xcode-select --install` itself, which opens Apple's dialog; the download is roughly 0.7 GB and the tools take **1.7 GB** installed (measured here, version 27.0).
-- The app calls `xcrun clang++`, which picks the SDK itself. It compiles each unit with `-std=c++20 -O<n> -g0 -fPIC -fvisibility=hidden` and links a bundle with `-bundle -bundle_loader <the program>`, so the corpus's references to the runtime bind to the running executable. Tested with Xcode's toolchain; with the Command Line Tools alone it is the same `clang++` through `xcrun`, but that was not tested on a machine without Xcode.
+- The app calls `xcrun clang++`, which picks the SDK itself. It compiles each unit with `-std=c++20 -O<n> -g0 -fPIC -fvisibility=hidden` and now links with `-dynamiclib -Wl,-undefined,error`: the corpus ABI needs no host symbols or bundle loader. The earlier bundle build was tested with Xcode's toolchain; the Command Line Tools-only setup was not tested on a machine without Xcode.
 - Without the tools the game still plays under the interpreter; nothing else is lost.
 - **Signing**: the program is signed and notarized; the corpus library is made on the player's machine and loaded with `dlopen`. Hardened-runtime programs refuse unsigned libraries unless they have the `com.apple.security.cs.disable-library-validation` entitlement, so the release needs it (or the app ad-hoc signs each library it makes with `codesign -s -`, which the linker already does on Apple Silicon). Not tested with a notarized build.
 
