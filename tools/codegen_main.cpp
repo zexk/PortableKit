@@ -1039,6 +1039,11 @@ struct GeneratedFunctionInput {
     const std::set<std::uint32_t> *unit_indices{};
 };
 
+bool entries_are_contiguous(const std::set<std::uint32_t> &entries) {
+    return !entries.empty() && std::adjacent_find(entries.begin(), entries.end(),
+        [](std::uint32_t previous, std::uint32_t next) { return next - previous != 4u; }) == entries.end();
+}
+
 std::string emit_function_source(const GeneratedFunctionInput &function,
                                  const psprecomp::GuestMemory &memory,
                                  const std::string &cpp_name) {
@@ -1048,7 +1053,8 @@ std::string emit_function_source(const GeneratedFunctionInput &function,
     // guest addresses compiles to a branch tree, and every outer dispatch pays
     // for it.  When the entries fit a bounded window we emit a dense
     // offset -> contiguous id table instead, so the switch covers 1..N with no
-    // holes and lowers to a single jump table: two loads and one indirect jump.
+    // holes and lowers to a single jump table. Consecutive entries compute the
+    // id directly; sparse entries first look it up in the offset table.
     // The guarded offset/alignment test keeps the accepted PC set identical to
     // the exact comparisons it replaces.
     constexpr std::uint64_t kMaximumDenseSlots = 8192u;
@@ -1062,17 +1068,22 @@ std::string emit_function_source(const GeneratedFunctionInput &function,
     const std::string table_name = "kEntryIds_" + cpp_name;
 
     if (dense_dispatch) {
+        const bool contiguous_entries = entries_are_contiguous(function.entry_labels);
         std::map<std::uint32_t, std::uint32_t> id_by_label;
         std::uint32_t next_id = 1u;
         for (const auto label : function.entry_labels) id_by_label[label] = next_id++;
 
-        body << "static const std::uint16_t " << table_name << "[" << (dense_span / 4u) << "] = {";
-        for (std::uint32_t offset = 0u; offset < dense_span; offset += 4u) {
-            const auto found = id_by_label.find(dense_base + offset);
-            if ((offset / 4u) % 32u == 0u) body << "\n   ";
-            body << ' ' << (found != id_by_label.end() ? found->second : 0u) << ',';
+        // Consecutive instruction entries have id = offset / 4 + 1. Do not
+        // store that identity mapping in every generated translation unit.
+        if (!contiguous_entries) {
+            body << "static const std::uint16_t " << table_name << "[" << (dense_span / 4u) << "] = {";
+            for (std::uint32_t offset = 0u; offset < dense_span; offset += 4u) {
+                const auto found = id_by_label.find(dense_base + offset);
+                if ((offset / 4u) % 32u == 0u) body << "\n   ";
+                body << ' ' << (found != id_by_label.end() ? found->second : 0u) << ',';
+            }
+            body << "\n};\n";
         }
-        body << "\n};\n";
 
         body << "void " << cpp_name << "_entry(CorpusRuntime &rt, AllegrexContext &ctx, std::uint16_t direct_entry_id, AotFastView &aot_mem) {\n"
              << "    std::uint32_t jump_target = 0u;\n"
@@ -1084,7 +1095,9 @@ std::string emit_function_source(const GeneratedFunctionInput &function,
              << "    if (entry_id == 0u) {\n"
              << "        const std::uint32_t entry_delta = local_pc - " << psprecomp::hex32(dense_base) << "u;\n"
              << "        entry_id = (entry_delta < " << dense_span
-             << "u && (entry_delta & 3u) == 0u) ? " << table_name << "[entry_delta >> 2u] : 0u;\n"
+             << "u && (entry_delta & 3u) == 0u) ? "
+             << (contiguous_entries ? "(entry_delta >> 2u) + 1u" : table_name + "[entry_delta >> 2u]")
+             << " : 0u;\n"
              << "    }\n"
              << "    switch (entry_id) {\n";
         for (const auto label : function.entry_labels) {
@@ -1787,13 +1800,21 @@ int generate_auto(const std::filesystem::path &elf_path,
         }
         // One call site instead of thousands of identical statements keeps
         // registration cheap to compile and small in every linked module.
-        out << "    static const std::uint32_t entries[] = {\n";
-        for (const auto label : unit.entries)
-            out << "        " << psprecomp::hex32(label) << "u,\n";
+        const bool contiguous_entries = entries_are_contiguous(unit.entries);
+        if (contiguous_entries) {
+            out << "    for (std::uint32_t index = 0; index < " << unit.entries.size() << "u; ++index) {\n"
+                << "        const std::uint32_t address = " << psprecomp::hex32(*unit.entries.begin())
+                << "u + index * 4u;\n";
+        } else {
+            out << "    static const std::uint32_t entries[] = {\n";
+            for (const auto label : unit.entries)
+                out << "        " << psprecomp::hex32(label) << "u,\n";
+            out << "    };\n    for (const auto address : entries)\n";
+        }
         // The runtime treats names starting with recomp_unit_ as chainable.
-        out << "    };\n    for (const auto address : entries)\n"
-            << "        runtime.register_function(address, &" << generated_unit.name
+        out << "        runtime.register_function(address, &" << generated_unit.name
             << ", \"recomp_unit_" << generated_unit.name << "\");\n";
+        if (contiguous_entries) out << "    }\n";
         registered_entries += unit.entries.size();
         out << "}\n} // namespace psprecomp\n";
         rewritten_units += write_text_if_changed(path, out.str()) ? 1u : 0u;

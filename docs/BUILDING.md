@@ -96,8 +96,9 @@ SDL3, Vulkan and `glslangValidator` for the renderer; without them the build say
 
 ### Generated registration size
 
-Automatic corpora register each unit's entry addresses from a constant array
-and one loop. This keeps the same entry order, function pointers and chainable
+Automatic corpora register each unit's entry addresses with one loop, using
+arithmetic for consecutive entries and a constant array for sparse entries.
+This keeps the same entry order, function pointers and chainable
 names, without asking the compiler to optimize thousands of repeated calls.
 Regenerate existing corpora to get this change; runtime ABI stays unchanged.
 
@@ -203,3 +204,28 @@ also relink against the minimal import libraries; recursive package dependency
 checks collect SDL3, avcodec, avutil, libc++ and libunwind without swresample.
 No game data is included. Audio sample decoding, gameplay, native Windows
 execution and other cross-toolchains remain unverified.
+
+### Consecutive entry tables
+
+Units whose entries cover every instruction word now compute their dispatch
+IDs and registration addresses directly. Sparse units keep their tables. The
+entry range and alignment guards, direct entry IDs, registration order and
+runtime ABI stay unchanged. Regenerate the main corpus to obtain this change.
+
+In the complete Portable Ops main corpus, 117 of 118 units have consecutive
+entries. Generated C++ falls from 94,315,233 to 81,471,450 bytes (13.6%). All
+482,156 entry addresses and IDs match, and instruction bodies are unchanged.
+All 52 C++/header files of the representative compact stage remain
+byte-identical, so these overlays do not need recompilation.
+
+With llvm-mingw 20260922 UCRT x86-64 at `-O2 -g0`, the median-sized main unit's
+object falls from 351,213 to 326,414 bytes (7.1%). Three alternating compile
+runs give median CPU times of 10.901 and 10.745 seconds; that small difference
+does not establish a substantial compilation speedup. Other builds were
+running during the measurement.
+
+The synthetic registration check also executes all registered entries,
+compares normal and direct-ID dispatch, checks local returns, and rejects
+misaligned, out-of-range and missing compact entries. All 22 framework tests
+pass on Linux. The main-corpus synthetic runner also passes under Wine after
+compilation with llvm-mingw. Gameplay remains unverified.

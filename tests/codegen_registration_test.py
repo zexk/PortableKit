@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Compile and run synthetic main/overlay registration, including sparse entries.
+"""Compile and run synthetic main/overlay registration and entry dispatch.
 
 Usage: python3 tests/codegen_registration_test.py out/psp_recomp c++ [cmake]
 Requires CMake and a native GCC-compatible C++ compiler on Unix; no game data.
@@ -18,7 +18,7 @@ def check(recompiler, compiler, cmake='cmake'):
         root = pathlib.Path(directory)
         # Two reachable return blocks, separated by unreachable words. The
         # branch targets offset 16; offset 8 is the untaken continuation.
-        code = [0x10000003, 0, 0x03E00008, 0, 0x03E00008, 0, 0, 0]
+        code = [0x10000003, 0x24020001, 0x03E00008, 0x24020002, 0x03E00008, 0x24020003, 0, 0]
         image = bytearray(128 + 4 * len(code))
         image[:7] = b'\x7fELF\x01\x01\x01'
         struct.pack_into('<HHIIIIIHHHHHH', image, 16,
@@ -73,26 +73,80 @@ file(GENERATE OUTPUT "${{CMAKE_BINARY_DIR}}/module-path" CONTENT "$<TARGET_FILE:
 #include <cassert>
 #include <cstdio>
 #include <dlfcn.h>
+#include <map>
 using namespace psprecomp;
 namespace psprecomp { void REGISTRY(CorpusRuntime &); }
+static std::map<std::uint32_t, CorpusFunction> functions;
+static std::map<std::uint32_t, CorpusEntryFunction> unit_entries;
+static unsigned errors;
 static void record(CorpusRuntime &, std::uint32_t pc, CorpusFunction function, const char *name) {
     assert(function != nullptr);
+    assert(functions.emplace(pc, function).second);
     std::printf("%08X %s\\n", pc, name);
 }
-static void unit(CorpusRuntime &, std::uint32_t, std::uint32_t, std::uint32_t,
+static void unit(CorpusRuntime &, std::uint32_t, std::uint32_t base, std::uint32_t,
                  CorpusFunction function, CorpusEntryFunction entry) {
     assert(function != nullptr && entry != nullptr);
+    unit_entries.emplace(base, entry);
 }
 struct Host : CorpusRuntime {
-    Host(const CorpusHostApi *api) : CorpusRuntime(api, nullptr) {}
+    Host(const CorpusHostApi *api, const CorpusProcessState *process) : CorpusRuntime(api, process) {}
 };
 int main(int, char **argv) {
     CorpusHostApi api{};
     api.register_function = record;
     api.register_unit = unit;
-    Host host(&api);
+    api.chained_call = [](CorpusRuntime &, AllegrexContext &, AotFastView *) { return false; };
+    api.chained_unit = [](CorpusRuntime &, AllegrexContext &, std::uint32_t, AotFastView *) { return false; };
+    api.unsupported = [](CorpusRuntime &, std::uint32_t, std::uint32_t, const char *reason) {
+        assert(std::strcmp(reason, "invalid internal function entry") == 0);
+        ++errors;
+    };
+    CorpusProcessState process{};
+    Host host(&api, &process);
     LOAD
     REGISTRY(host);
+    constexpr std::uint32_t base = 0x08804000u, return_pc = base + 64u;
+    const std::uint32_t expected_pc[] = {base + 16, return_pc, return_pc, base + 16,
+                                       return_pc, base + 32, base + 32, base + 32};
+    const std::uint32_t expected_v0[] = {1, 2, 2, 2, 3, 3, 0, 0};
+    for (const auto &[pc, function] : functions) {
+        AllegrexContext ctx{};
+        ctx.pc = pc;
+        ctx.gpr[31] = return_pc;
+        function(host, ctx);
+        assert(errors == 0 && ctx.pc == expected_pc[(pc - base) / 4]);
+        assert(ctx.gpr[2] == expected_v0[(pc - base) / 4]);
+        // Direct ids must select the same entries as PC dispatch.
+        if (!unit_entries.empty()) {
+            ctx = {};
+            ctx.pc = pc;
+            ctx.gpr[31] = return_pc;
+            AotFastView view;
+            unit_entries.at(pc & ~15u)(host, ctx, ((pc - base) % 16) / 4 + 1, view);
+            assert(errors == 0 && ctx.pc == expected_pc[(pc - base) / 4]);
+            assert(ctx.gpr[2] == expected_v0[(pc - base) / 4]);
+        }
+    }
+    // A local return reaches emitted code in the full corpus, but leaves
+    // through the dispatcher when the compact corpus has no entry there.
+    AllegrexContext local{};
+    local.pc = base + 16;
+    local.gpr[31] = base + 24;
+    functions.at(base + 16)(host, local);
+    assert(errors == 0 && local.gpr[2] == 3);
+    assert(local.pc == (functions.contains(base + 24) ? base + 32 : base + 24));
+    // Reject below/above each unit, misalignment and holes in compact tables.
+    for (std::uint32_t unit_base : {base, base + 16}) {
+        for (std::uint32_t pc = unit_base - 4; pc <= unit_base + 16; ++pc) {
+            if (pc >= unit_base && pc < unit_base + 16 && functions.contains(pc)) continue;
+            AllegrexContext ctx{};
+            ctx.pc = pc;
+            const auto before = errors;
+            functions.at(unit_base)(host, ctx);
+            assert(errors == before + 1 && ctx.pc == pc);
+        }
+    }
 }
 '''.replace('REGISTRY', registry).replace('LOAD', load))
             executable = root / 'registration'
@@ -104,7 +158,7 @@ int main(int, char **argv) {
             expected = [f'{0x08804000 + offset:08X} recomp_unit_{prefix}_unit_{offset // 16:04d}'
                         for offset in offsets]
             assert actual == expected, (actual, expected)
-    print('Generated registration passed (main and compact overlay).')
+    print('Generated registration and dispatch passed (main and compact overlay).')
 
 
 if __name__ == '__main__':
