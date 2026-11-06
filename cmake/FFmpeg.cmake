@@ -274,6 +274,7 @@ else()
     # Built once per build directory; again only when the pin or the flags change.
     string(REPLACE ";" " " _portablekit_ffmpeg_stamp
         "${PORTABLEKIT_FFMPEG_VERSION} ${PORTABLEKIT_FFMPEG_SHA256} --prefix=${_portablekit_ffmpeg_neutral_prefix} ${_portablekit_ffmpeg_flags}")
+    string(APPEND _portablekit_ffmpeg_stamp " source-path=relative")
     if(WIN32)
         string(APPEND _portablekit_ffmpeg_stamp " compiler=${CMAKE_C_COMPILER} ${CMAKE_C_COMPILER_VERSION}")
     endif()
@@ -291,14 +292,11 @@ else()
         file(ARCHIVE_EXTRACT INPUT "${_portablekit_ffmpeg_archive}" DESTINATION "${_portablekit_ffmpeg_root}")
         file(MAKE_DIRECTORY "${_portablekit_ffmpeg_root}/build")
         set(_log "${_portablekit_ffmpeg_root}/build")
-        set(_configure "${_portablekit_ffmpeg_src}/configure")
-        if(WIN32)
-            # FFmpeg recognizes build/src and keeps __FILE__ paths relative.
-            file(CREATE_LINK "../ffmpeg-${PORTABLEKIT_FFMPEG_VERSION}" "${_log}/src" SYMBOLIC)
-            set(_configure src/configure)
-        endif()
+        # FFmpeg recognizes build/src and keeps __FILE__ paths relative on
+        # every source-build platform, including the Linux release libraries.
+        file(CREATE_LINK "../ffmpeg-${PORTABLEKIT_FFMPEG_VERSION}" "${_log}/src" SYMBOLIC)
         _portablekit_ffmpeg_run(configure "${_log}/configure.log"
-            sh "${_configure}" "--prefix=${_portablekit_ffmpeg_neutral_prefix}" ${_portablekit_ffmpeg_flags})
+            sh src/configure "--prefix=${_portablekit_ffmpeg_neutral_prefix}" ${_portablekit_ffmpeg_flags})
         # The licensing in docs/SOURCE_PROVENANCE.md assumes exactly this.
         file(READ "${_log}/configure.log" _portablekit_ffmpeg_configure)
         file(READ "${_log}/config.h" _portablekit_ffmpeg_config)

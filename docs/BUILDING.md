@@ -205,6 +205,11 @@ checks collect SDL3, avcodec, avutil, libc++ and libunwind without swresample.
 No game data is included. Audio sample decoding, gameplay, native Windows
 execution and other cross-toolchains remain unverified.
 
+All source-build platforms use a relative FFmpeg source path, so diagnostic
+strings do not retain the build directory. The Linux decoder smoke check and
+the port's binary path audit pass with these libraries. Existing source builds
+rebuild once to replace libraries made with absolute source paths.
+
 ### Consecutive entry tables
 
 Units whose entries cover every instruction word now compute their dispatch
