@@ -135,3 +135,20 @@ Linux (with undefined symbols rejected) and llvm-mingw; the Windows DLL imports
 only system libraries. The synthetic registration check also loads its module
 into a host built without exported symbols. Windows execution, macOS and
 Android remain unverified.
+
+The complete Portable Ops Linux target also builds with the Vulkan renderer
+and system FFmpeg enabled. Across all 118 generated units at `-O2 -g0`, GCC
+16.2 produced 78,361,744 bytes of objects, down from 99,678,328 (21.4%). A
+controlled relink with identical final host objects and linker flags, replacing
+only those 118 unit objects, reduced the executable from 62,243,280 to
+52,584,968 bytes (15.5%). These are unstripped development executables, not
+packaged releases. Removing host exports separately saved 729,088 bytes from
+the executable with the new corpus.
+
+All 22 framework CTests pass, including generated registration and loading an
+independent overlay. The registration test also passes with Ninja selected
+through `CMAKE_GENERATOR`. In a fresh consumer configuration, disabling the
+framework tests removes 223 compile commands (236 down to 13 for the framework
+portion); existing caches still require an explicit opt-out. No game was
+launched for these checks, and no complete cold-build timing comparison or
+full regenerated overlay-package build was performed.
