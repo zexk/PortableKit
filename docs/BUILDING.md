@@ -152,3 +152,17 @@ framework tests removes 223 compile commands (236 down to 13 for the framework
 portion); existing caches still require an explicit opt-out. No game was
 launched for these checks, and no complete cold-build timing comparison or
 full regenerated overlay-package build was performed.
+
+### Faster code generation
+
+VFPU lowering now checks for each helper's literal name before running its
+regex and compiles the patterns once per process. The lowering passes also
+move their source buffer instead of copying it between passes.
+
+On Linux x86-64 with the Release GCC 16.2 recompiler, three alternating runs
+reduced median CPU time for the complete Portable Ops main corpus from 27.776
+to 22.231 seconds (20%). A representative 807,292-byte compact stage dropped
+from 3.741 to 2.659 seconds (29%). All 120 main-corpus and 52 stage C++/header
+files were byte-identical before and after. These are generation times, not
+C++ compilation times; unchanged port units keep their timestamps and cached
+objects. The framework's 22 tests pass, including automatic VFPU lowering.

@@ -828,6 +828,20 @@ static void test_codegen_vh2f_lowering() {
             "VF2H.P was not lowered to the dedicated AOT helper");
     require(text.find("vfpu4 not lowered yet") == std::string::npos,
             "VFPU horizontal codegen retained the generic VFPU4 fallback");
+    // Automatic generation further specializes the vector helpers. Its fast
+    // literal prefilter must still let these instructions reach the lowering.
+    const auto automatic_dir = root / "automatic";
+    const std::string automatic_command = shell_quote(codegen_path) + " " + shell_quote(elf_path) +
+        " --auto " + shell_quote(automatic_dir);
+    require(std::system(shell_command(automatic_command).c_str()) == 0,
+            "psp_recomp automatic VFPU fixture generation failed");
+    {
+        std::ifstream generated(automatic_dir / "generated_unit_0000.cpp");
+        text.assign((std::istreambuf_iterator<char>(generated)), std::istreambuf_iterator<char>());
+    }
+    require(text.find("ctx.read_vfpu_vector_ct<") != std::string::npos &&
+            text.find("ctx.write_vfpu_vector_with_destination_prefix_ct<") != std::string::npos,
+            "Automatic VFPU lowering skipped the fixture's vector helpers");
     std::filesystem::remove_all(root);
 #endif
 }

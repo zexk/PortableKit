@@ -1510,61 +1510,70 @@ std::string lower_constant_fpr_accesses(std::string text) {
 // scalar-vs-control selection and 1..4-lane loops disappear before MSVC sees the
 // giant translation units. Dynamic-size matrix helpers remain untouched.
 std::string lower_constant_vfpu_accesses(std::string text) {
-    const std::regex read_prefix(
+    // Most units use only a few of these helpers. A literal search avoids
+    // scanning the whole unit with every regex, including patterns absent
+    // from its instructions. Compile each pattern once for the whole corpus.
+    const auto replace = [&text](std::string_view needle, const std::regex &pattern, const char *replacement) {
+        if (text.find(needle) != std::string::npos)
+            text = std::regex_replace(text, pattern, replacement);
+    };
+    static const std::regex read_prefix(
         R"(ctx\.read_vfpu_vector_with_source_prefix\(([A-Za-z0-9_]+), ([0-9]+)u, ([1-4])u, ([01])u\);)" );
-    text = std::regex_replace(text, read_prefix,
+    replace("ctx.read_vfpu_vector_with_source_prefix(", read_prefix,
         "ctx.read_vfpu_vector_with_source_prefix_ct<$2u, $3u, $4u>($1);");
 
-    const std::regex read_plain(
+    static const std::regex read_plain(
         R"(ctx\.read_vfpu_vector\(([A-Za-z0-9_]+), ([0-9]+)u, ([1-4])u\);)" );
-    text = std::regex_replace(text, read_plain,
+    replace("ctx.read_vfpu_vector(", read_plain,
         "ctx.read_vfpu_vector_ct<$2u, $3u>($1);");
 
-    const std::regex write_prefix(
+    static const std::regex write_prefix(
         R"(ctx\.write_vfpu_vector_with_destination_prefix\(([A-Za-z0-9_]+), ([0-9]+)u, ([1-4])u\);)" );
-    text = std::regex_replace(text, write_prefix,
+    replace("ctx.write_vfpu_vector_with_destination_prefix(", write_prefix,
         "ctx.write_vfpu_vector_with_destination_prefix_ct<$2u, $3u>($1);");
 
-    const std::regex write_plain(
+    static const std::regex write_plain(
         R"(ctx\.write_vfpu_vector\(([A-Za-z0-9_]+), ([0-9]+)u, ([1-4])u\);)" );
-    text = std::regex_replace(text, write_plain,
+    replace("ctx.write_vfpu_vector(", write_plain,
         "ctx.write_vfpu_vector_ct<$2u, $3u>($1);");
 
-    const std::regex source_prefix_plain(
+    static const std::regex source_prefix_plain(
         R"(ctx\.apply_vfpu_source_prefix\(([A-Za-z0-9_]+), ([1-4])u, ([01])u\);)" );
-    text = std::regex_replace(text, source_prefix_plain,
+    replace("ctx.apply_vfpu_source_prefix(", source_prefix_plain,
         "ctx.apply_vfpu_source_prefix_ct<$2u, $3u>($1);");
 
-    const std::regex fpu_to_word(
+    static const std::regex fpu_to_word(
         R"(ctx\.fpu_float_to_word\(([^,\n]+), ([0-3])u\))" );
-    text = std::regex_replace(text, fpu_to_word,
+    replace("ctx.fpu_float_to_word(", fpu_to_word,
         "ctx.fpu_float_to_word_ct<$2u>($1)");
 
-    const std::regex vcmp(
+    static const std::regex vcmp(
         R"(ctx\.execute_vfpu_vcmp\(([0-9]+)u, ([0-9]+)u, ([1-4])u, ([0-9]+)u\);)" );
-    text = std::regex_replace(text, vcmp,
+    replace("ctx.execute_vfpu_vcmp(", vcmp,
         "ctx.execute_vfpu_vcmp_ct<$1u, $2u, $3u, $4u>();");
 
-    const std::regex vcmov(
+    static const std::regex vcmov(
         R"(ctx\.execute_vfpu_vcmov\(([0-9]+)u, ([0-9]+)u, ([1-4])u, ([0-7])u, (true|false)\);)" );
-    text = std::regex_replace(text, vcmov,
+    replace("ctx.execute_vfpu_vcmov(", vcmov,
         "ctx.execute_vfpu_vcmov_ct<$1u, $2u, $3u, $4u, $5>();");
 
-    const std::regex vdot(
+    static const std::regex vdot(
         R"(ctx\.execute_vfpu_vdot\(([0-9]+)u, ([0-9]+)u, ([0-9]+)u, ([1-4])u\);)" );
-    text = std::regex_replace(text, vdot,
+    replace("ctx.execute_vfpu_vdot(", vdot,
         "ctx.execute_vfpu_vdot_ct<$1u, $2u, $3u, $4u>();");
 
-    const std::regex vscl(
+    static const std::regex vscl(
         R"(ctx\.execute_vfpu_vscl\(([0-9]+)u, ([0-9]+)u, ([0-9]+)u, ([1-4])u\);)" );
-    text = std::regex_replace(text, vscl,
+    replace("ctx.execute_vfpu_vscl(", vscl,
         "ctx.execute_vfpu_vscl_ct<$1u, $2u, $3u, $4u>();");
 
     // Only real registers can be specialised: there are 128 scalar and 16
     // control registers, and the compile-time form asserts that. Data decoded as
     // an MTV can name any of 256, and the runtime form ignores those the way the
     // hardware does, so leave them as calls rather than failing the build.
-    const auto specialise_scalar = [&text](const std::regex &pattern, const std::string &replacement) {
+    const auto specialise_scalar = [&text](std::string_view needle, const std::regex &pattern,
+                                          const std::string &replacement) {
+        if (text.find(needle) == std::string::npos) return;
         std::string result;
         auto begin = std::sregex_iterator(text.begin(), text.end(), pattern);
         std::size_t copied = 0u;
@@ -1582,9 +1591,11 @@ std::string lower_constant_vfpu_accesses(std::string text) {
         text = std::move(result);
     };
 
-    specialise_scalar(std::regex(R"(ctx\.vfpu_scalar_bits\(([0-9]+)u\))"), "ctx.vfpu_scalar_bits_ct<$1u>()");
+    static const std::regex scalar_read(R"(ctx\.vfpu_scalar_bits\(([0-9]+)u\))");
+    specialise_scalar("ctx.vfpu_scalar_bits(", scalar_read, "ctx.vfpu_scalar_bits_ct<$1u>()");
     // set_vfpu_scalar_bits second arguments in generated code stay on one line.
-    specialise_scalar(std::regex(R"(ctx\.set_vfpu_scalar_bits\(([0-9]+)u, ([^;\n]+)\);)"),
+    static const std::regex scalar_write(R"(ctx\.set_vfpu_scalar_bits\(([0-9]+)u, ([^;\n]+)\);)");
+    specialise_scalar("ctx.set_vfpu_scalar_bits(", scalar_write,
                       "ctx.set_vfpu_scalar_bits_ct<$1u>($2);");
     return text;
 }
@@ -1756,13 +1767,13 @@ int generate_auto(const std::filesystem::path &elf_path,
         const std::string unit_label = "unit " + std::to_string(unit_number) + "/" + std::to_string(units.size());
         std::string source = emit_function_source(generated_unit, memory, generated_unit.name);
         progress(unit_label + " emitted " + std::to_string(source.size() / 1024u) + " KiB, lowering GPR writes");
-        source = lower_constant_gpr_writes(source);
+        source = lower_constant_gpr_writes(std::move(source));
         progress(unit_label + " lowering FPR accesses");
-        source = lower_constant_fpr_accesses(source);
+        source = lower_constant_fpr_accesses(std::move(source));
         progress(unit_label + " lowering memory accesses");
-        source = lower_aot_memory_accesses(source);
+        source = lower_aot_memory_accesses(std::move(source));
         progress(unit_label + " lowering VFPU accesses");
-        source = lower_constant_vfpu_accesses(source);
+        source = lower_constant_vfpu_accesses(std::move(source));
         out << extra_instruction_declaration(source) << source;
         out << "void register_" << g_symbol_prefix << "_unit_" << unit.bucket << "(CorpusRuntime &runtime) {\n";
         // The fast unit table describes one contiguous corpus, so only the main
