@@ -84,6 +84,7 @@ Measured on an Apple M1 with 8 GB, from a fresh clone with an empty compiler cac
 | `PSPRECOMP_BUILD_TESTS` | `ON` standalone, `OFF` in a port | Build framework tests and host compile checks |
 | `PORTABLEKIT_RENDERER` | `ON` | Build the Vulkan renderer. Off gives a headless build |
 | `PORTABLEKIT_FFMPEG` | `bundled` | `bundled` builds FFmpeg with the project, `system` uses one found through pkg-config, `OFF` drops music and movies |
+| `PORTABLEKIT_FFMPEG_WINDOWS_PREBUILT` | `OFF` for Unix-to-MinGW, `ON` on Windows | Use full prebuilt Windows FFmpeg instead of the minimal source build |
 | `PORTABLEKIT_RELEASE` | `OFF` | Build for distribution: no paths into the checkout, libraries from `lib/` next to the executable |
 | `PSPRECOMP_LTO` | `OFF` | Whole-program optimisation |
 | `PORTABLEKIT_BUILD_LABEL` | empty | A name for the build, shown beside the version: in the window title, the menu's About section, the desktop app's library header and `portablekit --version`. For telling a build made with other components (see below) from the plain one without patching sources |
@@ -166,3 +167,39 @@ from 3.741 to 2.659 seconds (29%). All 120 main-corpus and 52 stage C++/header
 files were byte-identical before and after. These are generation times, not
 C++ compilation times; unchanged port units keep their timestamps and cached
 objects. The framework's 22 tests pass, including automatic VFPU lowering.
+
+### Minimal Windows FFmpeg
+
+Unix-to-MinGW x64 builds now compile the same pinned FFmpeg 7.1.5 source as
+Linux, with only ATRAC3, ATRAC3plus and H.264 decoding. Enable C and C++ in the
+consuming project and supply the MinGW tools through its CMake toolchain.
+Native Windows builds keep the prebuilt default. Set
+`PORTABLEKIT_FFMPEG_WINDOWS_PREBUILT=ON` to use that fallback when cross-building.
+Projects without a configured C compiler also keep the prebuilt default.
+
+With llvm-mingw 20260922 UCRT x86-64, the two DLLs total 2,707,968 bytes:
+1,995,776 for avcodec and 712,192 for avutil. The prebuilt DLLs, including their
+swresample dependency, total 69,278,720 bytes. This saves 96.1% of the FFmpeg
+runtime size. The source build took about 34 seconds with two jobs and a cached
+source archive; reconfiguration reused it without recompiling. DLLs contain no
+absolute checkout paths. The build stages `FFmpeg-LICENSE.txt` (LGPL 2.1) and
+`FFmpeg-SOURCE.txt` beside them. Packagers should follow DLL imports rather than
+require swresample, which this configuration does not use.
+
+The standalone synthetic decoder check is runnable without a port:
+
+```sh
+cmake -S tests/ffmpeg -B out-ffmpeg -G Ninja
+cmake --build out-ffmpeg -j2
+ctest --test-dir out-ffmpeg --output-on-failure
+```
+
+For Windows, add the port's `CMAKE_TOOLCHAIN_FILE` and run
+`bin/ffmpeg_check.exe` on Windows or under Wine. It checks both ATRAC decoder
+registrations and decodes a synthetic H.264 frame, comparing every pixel.
+The check passes with Linux source libraries and under Wine with both Windows
+source and prebuilt libraries. Existing complete Portable Ops+ Windows objects
+also relink against the minimal import libraries; recursive package dependency
+checks collect SDL3, avcodec, avutil, libc++ and libunwind without swresample.
+No game data is included. Audio sample decoding, gameplay, native Windows
+execution and other cross-toolchains remain unverified.

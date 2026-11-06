@@ -4,10 +4,11 @@
 # PORTABLEKIT_FFMPEG selects where they come from:
 #   bundled  (default) On macOS and Linux, download the pinned FFmpeg release
 #            below, check its SHA-256 and build it at configure time with the
-#            LGPL-only configuration below. On Windows, whose documented MSVC
-#            toolchain cannot run FFmpeg's configure, download the pinned
-#            prebuilt LGPL shared build below instead. Either way the libraries
-#            end up next to the executable, so it needs no FFmpeg on the system.
+#            LGPL-only configuration below. Unix-to-MinGW builds use the same
+#            minimal source build. Native Windows builds, whose MSVC toolchain
+#            cannot run FFmpeg's configure, use the pinned prebuilt LGPL build.
+#            Libraries end up next to the executable, so it needs no FFmpeg
+#            on the system.
 #   system   The libavcodec and libavutil that pkg-config finds.
 #   OFF      No FFmpeg: the game has no music and skips its movies.
 #
@@ -52,6 +53,15 @@ set(PORTABLEKIT_FFMPEG_WINDOWS_DLLS avcodec-61 avutil-59 swresample-5)
 set(PORTABLEKIT_FFMPEG "bundled" CACHE STRING
     "Where FFmpeg comes from: bundled (built with the project), system (pkg-config) or OFF (no music, no movies)")
 set_property(CACHE PORTABLEKIT_FFMPEG PROPERTY STRINGS bundled system OFF)
+if(WIN32)
+    set(_portablekit_ffmpeg_prebuilt_default ON)
+    if(MINGW AND CMAKE_HOST_UNIX AND CMAKE_C_COMPILER)
+        set(_portablekit_ffmpeg_prebuilt_default OFF)
+    endif()
+    option(PORTABLEKIT_FFMPEG_WINDOWS_PREBUILT
+        "Use the full prebuilt Windows FFmpeg instead of a minimal MinGW cross-build"
+        ${_portablekit_ffmpeg_prebuilt_default})
+endif()
 # PORTABLEKIT_FFMPEG used to be ON/OFF: ON (the old default) becomes bundled.
 string(TOUPPER "${PORTABLEKIT_FFMPEG}" _portablekit_ffmpeg_mode)
 if(_portablekit_ffmpeg_mode MATCHES "^(ON|TRUE|YES|Y|1|BUNDLED)$")
@@ -107,7 +117,7 @@ endfunction()
 # Runs a step of the FFmpeg build with its output in <log>; stops with the end
 # of the log on failure.
 function(_portablekit_ffmpeg_run what log)
-    execute_process(COMMAND ${ARGN}
+    execute_process(COMMAND ${CMAKE_COMMAND} -E env ${_portablekit_ffmpeg_environment} ${ARGN}
         WORKING_DIRECTORY "${_portablekit_ffmpeg_root}/build"
         OUTPUT_FILE "${log}" ERROR_FILE "${log}.err"
         RESULT_VARIABLE result)
@@ -143,7 +153,7 @@ elseif(_portablekit_ffmpeg_mode STREQUAL "system")
     set(PORTABLEKIT_HAS_FFMPEG ON)
     message(STATUS "portablekit: FFmpeg libavcodec ${PORTABLEKIT_LIBAV_libavcodec_VERSION} from the system; music and movies enabled")
 
-elseif(WIN32)
+elseif(WIN32 AND PORTABLEKIT_FFMPEG_WINDOWS_PREBUILT)
     if(NOT CMAKE_SIZEOF_VOID_P EQUAL 8 OR CMAKE_SYSTEM_PROCESSOR MATCHES "ARM|arm|aarch")
         message(FATAL_ERROR "portablekit: the bundled FFmpeg for Windows is x64 only. "
             "Configure with -DPORTABLEKIT_FFMPEG=system and an FFmpeg of your own.")
@@ -203,6 +213,7 @@ else()
     # Platform settings that do not change what is built: where macOS finds the
     # libraries (the executable's rpath) and the compiler to use.
     set(_portablekit_ffmpeg_flags ${PORTABLEKIT_FFMPEG_CONFIGURE_FLAGS})
+    set(_portablekit_ffmpeg_environment)
     if(APPLE)
         list(APPEND _portablekit_ffmpeg_flags --install-name-dir=@rpath)
         if(CMAKE_OSX_DEPLOYMENT_TARGET)
@@ -211,7 +222,36 @@ else()
                 "--extra-ldflags=-mmacosx-version-min=${CMAKE_OSX_DEPLOYMENT_TARGET}")
         endif()
     endif()
-    if(ANDROID)
+    if(WIN32)
+        if(NOT MINGW OR NOT CMAKE_HOST_UNIX OR NOT CMAKE_C_COMPILER
+           OR NOT CMAKE_SIZEOF_VOID_P EQUAL 8 OR CMAKE_SYSTEM_PROCESSOR MATCHES "ARM|arm|aarch")
+            message(FATAL_ERROR "portablekit: building Windows FFmpeg needs an x64 MinGW C compiler on a Unix host. "
+                "Set PORTABLEKIT_FFMPEG_WINDOWS_PREBUILT=ON to use the prebuilt libraries.")
+        endif()
+        list(APPEND _portablekit_ffmpeg_flags
+            --enable-cross-compile --target-os=mingw32 --arch=x86_64)
+        # FFmpeg embeds its configure flags in the DLLs. Put tool directories
+        # on PATH and record only tool names, not checkout or user paths.
+        set(_tool_dirs)
+        foreach(pair IN ITEMS "cc;C_COMPILER" "cxx;CXX_COMPILER" "ar;AR" "nm;NM"
+                              "ranlib;RANLIB" "strip;STRIP" "windres;RC_COMPILER" "cross-prefix;DLLTOOL")
+            list(GET pair 0 flag)
+            list(GET pair 1 tool)
+            if(NOT CMAKE_${tool})
+                message(FATAL_ERROR "portablekit: missing CMAKE_${tool} for the FFmpeg cross-build")
+            endif()
+            get_filename_component(_tool_dir "${CMAKE_${tool}}" DIRECTORY)
+            get_filename_component(_tool_name "${CMAKE_${tool}}" NAME)
+            list(APPEND _tool_dirs "${_tool_dir}")
+            if(flag STREQUAL "cross-prefix")
+                string(REGEX REPLACE "dlltool$" "" _tool_name "${_tool_name}")
+            endif()
+            list(APPEND _portablekit_ffmpeg_flags "--${flag}=${_tool_name}")
+        endforeach()
+        list(REMOVE_DUPLICATES _tool_dirs)
+        list(JOIN _tool_dirs ":" _tool_path)
+        set(_portablekit_ffmpeg_environment "PATH=${_tool_path}:$ENV{PATH}")
+    elseif(ANDROID)
         # Cross-compiled with the NDK's clang for the ABI and API level of the
         # rest of the build. FFmpeg's android target names the libraries
         # libavcodec.so and libavutil.so, without a version, which is also the
@@ -234,6 +274,9 @@ else()
     # Built once per build directory; again only when the pin or the flags change.
     string(REPLACE ";" " " _portablekit_ffmpeg_stamp
         "${PORTABLEKIT_FFMPEG_VERSION} ${PORTABLEKIT_FFMPEG_SHA256} --prefix=${_portablekit_ffmpeg_neutral_prefix} ${_portablekit_ffmpeg_flags}")
+    if(WIN32)
+        string(APPEND _portablekit_ffmpeg_stamp " compiler=${CMAKE_C_COMPILER} ${CMAKE_C_COMPILER_VERSION}")
+    endif()
     set(_portablekit_ffmpeg_stamp_file "${_portablekit_ffmpeg_prefix}/portablekit.stamp")
     set(_portablekit_ffmpeg_built "")
     if(EXISTS "${_portablekit_ffmpeg_stamp_file}")
@@ -248,8 +291,14 @@ else()
         file(ARCHIVE_EXTRACT INPUT "${_portablekit_ffmpeg_archive}" DESTINATION "${_portablekit_ffmpeg_root}")
         file(MAKE_DIRECTORY "${_portablekit_ffmpeg_root}/build")
         set(_log "${_portablekit_ffmpeg_root}/build")
+        set(_configure "${_portablekit_ffmpeg_src}/configure")
+        if(WIN32)
+            # FFmpeg recognizes build/src and keeps __FILE__ paths relative.
+            file(CREATE_LINK "../ffmpeg-${PORTABLEKIT_FFMPEG_VERSION}" "${_log}/src" SYMBOLIC)
+            set(_configure src/configure)
+        endif()
         _portablekit_ffmpeg_run(configure "${_log}/configure.log"
-            sh "${_portablekit_ffmpeg_src}/configure" "--prefix=${_portablekit_ffmpeg_neutral_prefix}" ${_portablekit_ffmpeg_flags})
+            sh "${_configure}" "--prefix=${_portablekit_ffmpeg_neutral_prefix}" ${_portablekit_ffmpeg_flags})
         # The licensing in docs/SOURCE_PROVENANCE.md assumes exactly this.
         file(READ "${_log}/configure.log" _portablekit_ffmpeg_configure)
         file(READ "${_log}/config.h" _portablekit_ffmpeg_config)
@@ -268,42 +317,60 @@ else()
         file(WRITE "${_portablekit_ffmpeg_stamp_file}" "${_portablekit_ffmpeg_stamp}")
     endif()
 
-    # The libraries go to lib/ next to the executable, under the names the
-    # loader looks for; the executable's rpath points there.
+    # Windows DLLs go beside the executable; other platforms use lib/ and rpath.
     set(_portablekit_ffmpeg_lib "${_portablekit_ffmpeg_bin}/lib")
+    set(_portablekit_ffmpeg_install_lib "${_portablekit_ffmpeg_prefix}/lib")
+    set(_portablekit_ffmpeg_license "FFmpeg-COPYING.LGPLv2.1.txt")
+    if(WIN32)
+        set(_portablekit_ffmpeg_lib "${_portablekit_ffmpeg_bin}")
+        set(_portablekit_ffmpeg_install_lib "${_portablekit_ffmpeg_prefix}/bin")
+        set(_portablekit_ffmpeg_license "FFmpeg-LICENSE.txt")
+    endif()
     add_library(portablekit_ffmpeg INTERFACE)
     set(_versions ${PORTABLEKIT_FFMPEG_SOVERSIONS})
     while(_versions)
         list(POP_FRONT _versions lib soversion)
-        if(APPLE)
+        if(WIN32)
+            set(runtime_name "${lib}-${soversion}.dll")
+        elseif(APPLE)
             set(runtime_name "lib${lib}.${soversion}.dylib")
         elseif(ANDROID)
             set(runtime_name "lib${lib}.so")
         else()
             set(runtime_name "lib${lib}.so.${soversion}")
         endif()
-        configure_file("${_portablekit_ffmpeg_prefix}/lib/${runtime_name}" "${_portablekit_ffmpeg_lib}/${runtime_name}" COPYONLY)
+        configure_file("${_portablekit_ffmpeg_install_lib}/${runtime_name}" "${_portablekit_ffmpeg_lib}/${runtime_name}" COPYONLY)
         add_library(portablekit_ffmpeg_${lib} SHARED IMPORTED)
         set_target_properties(portablekit_ffmpeg_${lib} PROPERTIES
             IMPORTED_LOCATION "${_portablekit_ffmpeg_lib}/${runtime_name}")
-        if(NOT APPLE)
+        if(WIN32)
+            set_target_properties(portablekit_ffmpeg_${lib} PROPERTIES
+                IMPORTED_IMPLIB "${_portablekit_ffmpeg_prefix}/lib/lib${lib}.dll.a")
+        elseif(NOT APPLE)
             set_target_properties(portablekit_ffmpeg_${lib} PROPERTIES IMPORTED_SONAME "${runtime_name}")
         endif()
         target_link_libraries(portablekit_ffmpeg INTERFACE portablekit_ffmpeg_${lib})
     endwhile()
     target_include_directories(portablekit_ffmpeg INTERFACE "${_portablekit_ffmpeg_prefix}/include")
-    configure_file("${_portablekit_ffmpeg_src}/COPYING.LGPLv2.1" "${_portablekit_ffmpeg_lib}/FFmpeg-COPYING.LGPLv2.1.txt" COPYONLY)
-    string(REPLACE ";" " " _portablekit_ffmpeg_flag_text "${PORTABLEKIT_FFMPEG_CONFIGURE_FLAGS}")
+    configure_file("${_portablekit_ffmpeg_src}/COPYING.LGPLv2.1" "${_portablekit_ffmpeg_lib}/${_portablekit_ffmpeg_license}" COPYONLY)
+    if(WIN32)
+        string(REPLACE ";" " " _portablekit_ffmpeg_flag_text "${_portablekit_ffmpeg_flags}")
+    else()
+        string(REPLACE ";" " " _portablekit_ffmpeg_flag_text "${PORTABLEKIT_FFMPEG_CONFIGURE_FLAGS}")
+    endif()
     _portablekit_ffmpeg_write_notice("${_portablekit_ffmpeg_lib}"
         "The FFmpeg libraries here (libavcodec, libavutil) are FFmpeg ${PORTABLEKIT_FFMPEG_VERSION},\n"
         "unmodified, licensed under the GNU LGPL version 2.1 or later\n"
-        "(FFmpeg-COPYING.LGPLv2.1.txt). They are dynamically linked.\n\n"
+        "(${_portablekit_ffmpeg_license}). They are dynamically linked.\n\n"
         "Source: ${PORTABLEKIT_FFMPEG_URL}\n"
         "SHA-256: ${PORTABLEKIT_FFMPEG_SHA256}\n"
         "Configured with: ${_portablekit_ffmpeg_flag_text}\n")
-    set(PORTABLEKIT_FFMPEG_RPATH "$ORIGIN/lib")
-    if(APPLE)
+    if(WIN32)
+        set(PORTABLEKIT_FFMPEG_RPATH "")
+    elseif(APPLE)
         set(PORTABLEKIT_FFMPEG_RPATH "@loader_path/lib")
+    else()
+        set(PORTABLEKIT_FFMPEG_RPATH "$ORIGIN/lib")
     endif()
     set(PORTABLEKIT_HAS_FFMPEG ON)
     message(STATUS "portablekit: bundled FFmpeg ${PORTABLEKIT_FFMPEG_VERSION} (LGPL, atrac3 atrac3p h264); music and movies enabled")
