@@ -217,6 +217,8 @@ entries. Generated C++ falls from 94,315,233 to 81,471,450 bytes (13.6%). All
 482,156 entry addresses and IDs match, and instruction bodies are unchanged.
 All 52 C++/header files of the representative compact stage remain
 byte-identical, so these overlays do not need recompilation.
+Three alternating generations of the main corpus reduce median recompiler
+CPU time from 22.725 to 21.860 seconds (3.8%).
 
 With llvm-mingw 20260922 UCRT x86-64 at `-O2 -g0`, the median-sized main unit's
 object falls from 351,213 to 326,414 bytes (7.1%). Three alternating compile
@@ -229,3 +231,13 @@ compares normal and direct-ID dispatch, checks local returns, and rejects
 misaligned, out-of-range and missing compact entries. All 22 framework tests
 pass on Linux. The main-corpus synthetic runner also passes under Wine after
 compilation with llvm-mingw. Gameplay remains unverified.
+
+The complete Linux port builds with the Vulkan renderer and system FFmpeg.
+Across all 118 main units at `-O2 -g0`, GCC 16.2 object size falls from
+78,361,744 to 75,462,864 bytes (3.7%). Controlled relinks with identical host
+objects and linker flags reduce the executable from 52,584,968 to 49,690,608
+bytes (5.5%). These are unstripped development executables, not release ZIPs.
+A registration-only runner linked against each complete corpus checks all
+482,156 entries, their order, names, unit bounds and function bindings; both
+runs produce the same result without executing guest instructions. No paired
+full-build timing or full Windows corpus build was performed.
