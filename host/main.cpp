@@ -21,6 +21,15 @@
 #include "psprecomp/runtime.hpp"
 #include "psprecomp/sha256.hpp"
 
+// A game's build generates it; the framework's host check has none.
+#if __has_include("portablekit_version.hpp")
+#include "portablekit_version.hpp"
+#else
+namespace portablekit {
+inline constexpr const char *kBuildVersion = "unversioned";
+}
+#endif
+
 #include <atomic>
 #include <cerrno>
 #include <chrono>
@@ -99,6 +108,7 @@ std::string usage() {
     return "usage: " + app + " [game_dir]\n"
            "       " + app + " --install [image.iso [--in-place]]\n"
            "       " + app + " --adhoc-server [port]\n"
+           "       " + app + " --version\n"
            "  game_dir        play from a directory holding EBOOT.ELF, disc.iso and ms0/\n"
            "  --install       run the setup again on screen, then play\n"
            "  --install image set up from image.iso without the setup screens, then exit\n"
@@ -330,6 +340,11 @@ int main(int argc, char **argv) {
 #endif
     try {
         if (argc > 1 && std::string(argv[1]) == "--adhoc-server") return run_adhoc_server(argc, argv);
+        // Before anything is read or set up: a packager's start check.
+        if (argc > 1 && std::string(argv[1]) == "--version") {
+            std::cout << portablekit::game().app_name << ' ' << portablekit::kBuildVersion << '\n';
+            return 0;
+        }
         Options options;
         try {
             options = parse_options(argc, argv);
