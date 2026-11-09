@@ -76,8 +76,10 @@ public:
     // its code has run.
     void set_lead(double fraction) noexcept;
     [[nodiscard]] double lead() const noexcept { return lead_; }
-    // The lead in time: that fraction of the frame less the first step.
-    [[nodiscard]] std::int64_t lead_us() const noexcept;
+    // The lead in time: at least that fraction of the frame less the first
+    // step, out to the next grid offset, since presents short of it are
+    // carried on anyway.
+    [[nodiscard]] std::int64_t lead_us() const noexcept { return lead_us_; }
     // A new game frame, for the moment `time_us` of real time, flipped at
     // `now_us`.
     void flip(std::int64_t time_us, std::int64_t now_us) noexcept;
@@ -126,6 +128,7 @@ private:
     // The furthest a present on time shows past the newer frame with the
     // lead: the largest grid offset below the first step plus the lead.
     std::int64_t reach_us_{};
+    std::int64_t lead_us_{};
     std::int64_t work_us_{kWorkMarginUs};
     std::vector<std::int64_t> work_window_;  // the last frames' code time, oldest first
     std::size_t work_cursor_{};

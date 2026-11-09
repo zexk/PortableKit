@@ -78,10 +78,20 @@ void PresentClock::apply_offsets() noexcept {
     const auto offset = [&](int index) { return static_cast<std::int64_t>(std::llround(index * step)) % frame_us_; };
     for (int index = 1; index <= 64; ++index)
         if (offset(index) > 0) first_step_us_ = std::min(first_step_us_, offset(index));
+    lead_us_ = 0;
     if (lead_ <= 0.0) return;
-    const std::int64_t below = first_step_us_ + lead_us();
-    for (int index = 1; index <= 64; ++index)
-        if (offset(index) < below) reach_us_ = std::max(reach_us_, offset(index));
+    // Grid moments less than this far into their frame are carried on; the
+    // first one past it needs the next frame, and the delay is what that
+    // one needs: no shorter than the lead asked for, often more.
+    const std::int64_t below =
+        first_step_us_ + std::llround(lead_ * static_cast<double>(frame_us_ - first_step_us_));
+    std::int64_t needs_next = frame_us_;
+    for (int index = 1; index <= 64; ++index) {
+        const std::int64_t at = offset(index);
+        if (at < below) reach_us_ = std::max(reach_us_, at);
+        else needs_next = std::min(needs_next, at);
+    }
+    lead_us_ = needs_next - first_step_us_;
 }
 
 void PresentClock::set_lead(double fraction) noexcept {
@@ -94,10 +104,6 @@ void PresentClock::set_lead(double fraction) noexcept {
 void PresentClock::reset() noexcept {
     has_newer_ = has_older_ = anchored_ = false;
     next_index_ = 0;
-}
-
-std::int64_t PresentClock::lead_us() const noexcept {
-    return std::llround(lead_ * static_cast<double>(frame_us_ - first_step_us_));
 }
 
 std::int64_t PresentClock::delay_us() const noexcept { return frame_us_ - first_step_us_ + work_us_ - lead_us(); }

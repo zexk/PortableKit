@@ -479,6 +479,9 @@ void present_clock() {
     check(leading.delay_us() == 6000, "at the full lead the delay is the game's code time alone");
     check(near(leading.blend_at(kGameFrameUs + kGameFrameUs), 1.5f),
           "a frame late by a whole frame is held half a frame on, not carried further");
+    leading.set_lead(0.3);
+    check(leading.delay_us() == 6000,
+          "at 60 any lead is the whole lead: the halfway present is carried on whatever it is");
     leading.set_lead(0.0);
     check(leading.delay_us() == kGameFrameUs / 2 + 6000 && leading.blend_at(3 * kGameFrameUs) == 1.0f,
           "without a lead nothing changes");
