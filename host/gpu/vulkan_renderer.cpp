@@ -1590,6 +1590,7 @@ struct VulkanRenderer::Impl {
     interpolation::CutThresholds cut_thresholds;
     interpolation::Matching matching;  // older_frame against newer_frame
     interpolation::RigidMotion camera_motion;  // matching.camera taken apart
+    interpolation::RigidMotion camera_motion_back;  // its inverse, from the newer camera to the older
     pacing::PresentClock present_clock;
     pacing::RateGovernor governor;
     InterpolationStats interpolation_stats;
@@ -7392,6 +7393,8 @@ void VulkanRenderer::Impl::finish_interpolated_frame(VkImage source, std::uint32
         matching.cut = older_frame.valid ? "not recorded" : "no frame before";
     }
     camera_motion = matching.camera_found ? interpolation::rigid_motion(matching.camera) : interpolation::RigidMotion{};
+    camera_motion_back =
+        camera_motion.valid ? interpolation::rigid_motion(camera_motion.inverse) : interpolation::RigidMotion{};
     InterpolationStats &stats = interpolation_stats;
     ++stats.frames;
     stats.eligible += matching.eligible_newer;
@@ -7622,6 +7625,15 @@ void VulkanRenderer::Impl::replay(VkCommandBuffer commands, std::uint32_t slot, 
                 older_of[static_cast<std::size_t>(matching.newer_of[i])] = static_cast<std::int32_t>(i);
     }
     const std::vector<std::int32_t> &partner_of = ahead ? older_of : matching.newer_of;
+    // Every blend goes from the frame drawn towards its partner: by `t` from
+    // the older frame, or by 1 - t (below 0) from the newer one with the
+    // camera's motion reversed. Taken from the newer frame, the blends give
+    // its own transforms back exactly at 1; going towards it from the older
+    // frame they come out a little off there (the camera's motion taken apart
+    // is not exactly the matrix it came from), and carried on, that offset
+    // would be on every present.
+    const float s = ahead ? 1.0f - t : t;
+    const interpolation::RigidMotion &camera = ahead ? camera_motion_back : camera_motion;
     breadcrumb(commands, std::string(ahead ? "carried" : "blended") + " present, " + std::to_string(base.groups.size()) +
                              " draw calls");
     Target &target = blend_targets[slot];
@@ -7792,7 +7804,7 @@ void VulkanRenderer::Impl::replay(VkCommandBuffer commands, std::uint32_t slot, 
             member = i;
             break;
         }
-        if (partner < 0 && t > 0.0f && motion_guard && camera_motion.valid &&
+        if (partner < 0 && t > 0.0f && motion_guard && camera.valid &&
             base.summaries[drawn.first_draw].eligible) {
             // A 3D draw without a partner (drawn only in the older frame, or
             // paired with a draw too far away to be itself) goes with the
@@ -7806,9 +7818,8 @@ void VulkanRenderer::Impl::replay(VkCommandBuffer commands, std::uint32_t slot, 
                 std::printf("[interp] %s only: vertices %08x texture %08x count %u indices %08x type %08x\n",
                             ahead ? "newer" : "older", from.vertex_address, from.texture_address, from.count,
                             from.index_address, from.vertex_type);
-            const interpolation::Matrix own = interpolation::multiply(from.view, from.world);
-            const interpolation::Matrix eye = ahead ? interpolation::multiply(back, own)
-                                                    : interpolation::multiply(interpolation::rigid_at(camera_motion, t), own);
+            const interpolation::Matrix eye =
+                interpolation::multiply(interpolation::rigid_at(camera, s), interpolation::multiply(from.view, from.world));
             state.push.transform = interpolation::multiply(from.projection, eye);
             state.push.view_z = {eye[2], eye[6], eye[10], eye[14]};
             transform_valid = false;
@@ -7817,13 +7828,9 @@ void VulkanRenderer::Impl::replay(VkCommandBuffer commands, std::uint32_t slot, 
         }
         if (partner >= 0 && !ahead) bring_newer(newer.group_of[static_cast<std::size_t>(partner)]);
         if (partner >= 0 && t > 0.0f) {
-            const interpolation::DrawSummary &mine = base.summaries[member];
-            const interpolation::DrawSummary &mate = other.summaries[static_cast<std::size_t>(partner)];
-            const interpolation::DrawSummary &from = ahead ? mate : mine;  // the older of the pair
-            const interpolation::DrawSummary &to = ahead ? mine : mate;    // the newer
+            const interpolation::DrawSummary &from = base.summaries[member];
+            const interpolation::DrawSummary &to = other.summaries[static_cast<std::size_t>(partner)];
             const ReplayGroup &next = other.groups[other.group_of[static_cast<std::size_t>(partner)]];
-            const ReplayGroup &older_group = ahead ? next : drawn;
-            const ReplayGroup &newer_group = ahead ? drawn : next;
             // Eye space (view times world) is blended as a whole, following
             // the camera's motion along its arcs (blend_eye): blending view
             // and world apart let scenery swing on chords across a turn and
@@ -7836,18 +7843,18 @@ void VulkanRenderer::Impl::replay(VkCommandBuffer commands, std::uint32_t slot, 
                 eye_changed = true;
             }
             if (!projection_pair.same(from.projection, to.projection)) {
-                projection = interpolation::blend_linear(from.projection, to.projection, t);
+                projection = interpolation::blend_linear(from.projection, to.projection, s);
                 projection_pair = {&from.projection, &to.projection};
                 changed = true;
             }
             if (!world_pair.same(from.world, to.world)) {
-                world = interpolation::blend_affine(from.world, to.world, t);
+                world = interpolation::blend_affine(from.world, to.world, s);
                 world_pair = {&from.world, &to.world};
                 eye_changed = true;
             }
             if (eye_changed) {
                 view_world = interpolation::blend_eye(interpolation::multiply(from.view, from.world),
-                                                      interpolation::multiply(to.view, to.world), camera_motion, t);
+                                                      interpolation::multiply(to.view, to.world), camera, s);
                 changed = true;
             }
             if (changed) {
@@ -7860,17 +7867,15 @@ void VulkanRenderer::Impl::replay(VkCommandBuffer commands, std::uint32_t slot, 
             // a flipbook jumps to its next cell, and a wrap by the whole
             // texture: both are held.
             for (std::size_t axis = 2u; axis < 4u; ++axis) {
-                const float a = older_group.state.push.uv_transform[axis];
-                const float b = newer_group.state.push.uv_transform[axis];
+                const float a = drawn.state.push.uv_transform[axis];
+                const float b = next.state.push.uv_transform[axis];
                 if (a == b || drawn.state.push.uv_transform[axis - 2u] != next.state.push.uv_transform[axis - 2u])
                     continue;
                 // A flipbook's step to its next atlas cell is held, not
                 // blended (interpolation::blend_offset).
                 const float max_scroll = flipbook_guard ? interpolation::kMaxScrollStep : 0.5f;
-                const bool scrolling = interpolation::scrolls(a, b, max_scroll);
-                if (!scrolling) ++flipbook_steps;
-                // Carried on, a flipbook stays at the newer frame's cell.
-                state.push.uv_transform[axis] = ahead && !scrolling ? b : interpolation::blend_offset(a, b, t, max_scroll);
+                if (!interpolation::scrolls(a, b, max_scroll)) ++flipbook_steps;
+                state.push.uv_transform[axis] = interpolation::blend_offset(a, b, s, max_scroll);
             }
             // A lit draw's object block carries the world matrix its lights
             // are evaluated in; everything else in it stays.
@@ -7893,12 +7898,12 @@ void VulkanRenderer::Impl::replay(VkCommandBuffer commands, std::uint32_t slot, 
             // A raw skinned group is skinned on the GPU: its bones are blended
             // instead, which blends the skinned vertices the same way.
             if (drawn.raw_block != kNone && next.raw_block != kNone && next.vertex_count == drawn.vertex_count) {
-                const RawBlock &a = older.raws[older_group.raw_block];
-                const RawBlock &b = newer.raws[newer_group.raw_block];
+                const RawBlock &a = base.raws[drawn.raw_block];
+                const RawBlock &b = other.raws[next.raw_block];
                 if (a.format == b.format) {
-                    RawBlock blended = ahead ? b : a;
+                    RawBlock blended = a;
                     for (std::size_t i = 0; i < blended.bones.size(); ++i)
-                        blended.bones[i] = a.bones[i] + (b.bones[i] - a.bones[i]) * t;
+                        blended.bones[i] += (b.bones[i] - blended.bones[i]) * s;
                     const VkDeviceSize at =
                         (scratch_at + uniform_alignment - 1u) / uniform_alignment * uniform_alignment;
                     if (at + sizeof(RawBlock) <= scratch_end) {
@@ -7942,19 +7947,17 @@ void VulkanRenderer::Impl::replay(VkCommandBuffer commands, std::uint32_t slot, 
                             continue;
                         // Read from the records, never back from `out`: mapped
                         // memory is slow to read.
-                        const GpuVertex *mine_v = base.skinned.data() + from_start;
-                        const GpuVertex *theirs_v = other.skinned.data() + to_start;
-                        const GpuVertex *f = ahead ? theirs_v : mine_v;  // older
-                        const GpuVertex *b = ahead ? mine_v : theirs_v;  // newer
+                        const GpuVertex *f = base.skinned.data() + from_start;
+                        const GpuVertex *b = other.skinned.data() + to_start;
                         GpuVertex *o = out + (from_start - drawn.skinned);
                         for (std::uint32_t v = 0; v < from_end - from_start; ++v) {
-                            GpuVertex blended = mine_v[v];
-                            blended.x = f[v].x + (b[v].x - f[v].x) * t;
-                            blended.y = f[v].y + (b[v].y - f[v].y) * t;
-                            blended.z = f[v].z + (b[v].z - f[v].z) * t;
-                            blended.nx = f[v].nx + (b[v].nx - f[v].nx) * t;
-                            blended.ny = f[v].ny + (b[v].ny - f[v].ny) * t;
-                            blended.nz = f[v].nz + (b[v].nz - f[v].nz) * t;
+                            GpuVertex blended = f[v];
+                            blended.x += (b[v].x - blended.x) * s;
+                            blended.y += (b[v].y - blended.y) * s;
+                            blended.z += (b[v].z - blended.z) * s;
+                            blended.nx += (b[v].nx - blended.nx) * s;
+                            blended.ny += (b[v].ny - blended.ny) * s;
+                            blended.nz += (b[v].nz - blended.nz) * s;
                             o[v] = blended;
                         }
                     }
