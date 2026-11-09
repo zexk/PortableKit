@@ -274,6 +274,12 @@ struct GameProfile {
     // The profile reads settings::current().fov_percent and adjusts its own
     // projection and culling. False keeps this setting out of the menu.
     bool adjustable_fov = false;
+    // The profile reads settings::current().detail_distance_percent and moves
+    // its switch to lower-detail models out by that much.
+    bool adjustable_detail_distance = false;
+    // The profile reads settings::current().hud_scale_percent and scales its
+    // interface towards the screen's edges.
+    bool adjustable_hud_scale = false;
 
     // --- Frame interpolation -----------------------------------------------
     // What tells a camera cut from motion when frames are blended
