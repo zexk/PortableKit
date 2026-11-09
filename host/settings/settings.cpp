@@ -230,6 +230,10 @@ const std::vector<Field> &fields() {
          [](Settings &s, const char *t) {
              if (!kFrameRates.parse(t, s.frame_rate)) s.frame_rate = FrameRate::Fps30;
          }},
+        {"video.interpolation_lead", "INTERPOLATION_LEAD",
+         [](Settings &s, const std::string &t) { return parse_uint(t, 0u, 100u, s.interpolation_lead_percent); },
+         [](const Settings &s) { return std::to_string(s.interpolation_lead_percent); },
+         [](Settings &s, const char *t) { parse_uint(t, 0u, 100u, s.interpolation_lead_percent); }},
         {"video.frame_rate_auto", "FRAME_RATE_AUTO",
          [](Settings &s, const std::string &t) { return parse_bool(t, s.frame_rate_auto); },
          [](const Settings &s) { return std::string(s.frame_rate_auto ? "1" : "0"); },

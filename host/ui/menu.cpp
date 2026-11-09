@@ -398,6 +398,20 @@ void Menu::video() {
         }
     }
     {
+        RowOptions o = options_for("video.interpolation_lead",
+                                   "Frame interpolation shows each frame later than it was made, to have the next "
+                                   "one to blend towards. Prediction shows it sooner by continuing motion past the "
+                                   "newest frame instead. 0% is the smoothest; 100% is as quick to react as without "
+                                   "interpolation, with a brief overshoot when something stops or turns. At 60 any "
+                                   "value above 0% removes the whole delay.");
+        if (s.unthrottled || s.frame_rate == settings::FrameRate::Fps30) o.disabled = true;
+        int lead = static_cast<int>(s.interpolation_lead_percent);
+        if (slider_row("Prediction", lead, 0, 100, 10, "%d%%", o)) {
+            s.interpolation_lead_percent = static_cast<std::uint32_t>(lead);
+            settings::save();
+        }
+    }
+    {
         RowOptions o = options_for("video.frame_rate_auto",
                                    "On lowers the frame rate by itself when presenting that often would slow the "
                                    "game. Off keeps the chosen rate, and the game may then run below full speed.");
@@ -461,6 +475,7 @@ void Menu::video() {
         restore("video.present_mode", s.present_mode, d.present_mode);
         restore("video.frame_rate", s.frame_rate, d.frame_rate);
         restore("video.frame_rate_auto", s.frame_rate_auto, d.frame_rate_auto);
+        restore("video.interpolation_lead", s.interpolation_lead_percent, d.interpolation_lead_percent);
         restore("video.unthrottled", s.unthrottled, d.unthrottled);
         restore("video.fast_loading", s.fast_loading, d.fast_loading);
         restore("video.performance", s.perf, d.perf);

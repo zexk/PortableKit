@@ -61,6 +61,9 @@ struct Settings {
     bool fast_loading{true};           // ...but only while the game loads (kernel/fast_loading.hpp)
     FrameRate frame_rate{FrameRate::Fps30};
     bool frame_rate_auto{true};        // lower the frame rate rather than slow the game
+    // Of the delay frame interpolation adds, the percent presents skip by
+    // carrying the newest frame's motion on (pacing::PresentClock::set_lead).
+    std::uint32_t interpolation_lead_percent{0u};
     PerfDisplay perf{PerfDisplay::Off};
 
     // Text
