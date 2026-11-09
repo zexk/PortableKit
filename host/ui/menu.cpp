@@ -252,6 +252,16 @@ void Menu::video() {
             settings::save();
         }
     }
+    if (portablekit::game().adjustable_fov) {
+        int fov = static_cast<int>(s.fov_percent);
+        if (slider_row("Field of view", fov, 75, 150, 5, "%d%%",
+                       options_for("video.fov", "How much of the 3D world is visible. 100% is the game's own "
+                                                "view; higher values show more, keeping relative zoom. "
+                                                "The interface stays the same size."))) {
+            s.fov_percent = static_cast<std::uint32_t>(fov);
+            settings::save();
+        }
+    }
     if (choice_row("Scaling filter", s.sharp_screen ? "Sharp" : "Smooth",
                    options_for("video.sharp_screen", "How the finished picture is scaled to the window: smooth "
                                                      "(bilinear) or sharp (nearest pixel)."))) {
@@ -431,6 +441,7 @@ void Menu::video() {
         restore("video.fullscreen", s.fullscreen, d.fullscreen);
         restore("video.window_scale", s.window_scale, d.window_scale);
         restore("video.aspect", s.aspect, d.aspect);
+        restore("video.fov", s.fov_percent, d.fov_percent);
         restore("video.sharp_screen", s.sharp_screen, d.sharp_screen);
         restore("video.sharp_textures", s.sharp_textures, d.sharp_textures);
         restore("video.msaa", s.msaa, d.msaa);

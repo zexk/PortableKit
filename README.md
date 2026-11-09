@@ -8,6 +8,11 @@ Everything needed to turn a PlayStation Portable game into a native application:
 
 The game's Allegrex (MIPS) code is translated to C++ ahead of time and compiled for the target machine. There is no JIT, and no interpreter in the hot path: the interpreter exists to run what the recompiler missed, and to run a game before any of it has been recompiled. Around that code, PortableKit supplies what the console used to: the kernel, the system modules, a Vulkan renderer driven by the console's graphics command lists, audio, save data, ad hoc networking, a settings interface and a first-run installer.
 
+**F12** saves a PNG of the presented window, including the interface, at its
+full resolution in `screenshots/` under the game's data folder. Filenames are
+unique; a held key takes one screenshot. Scripted `.bmp` captures keep their
+existing format.
+
 ## Parts
 
 | Part | What it does |

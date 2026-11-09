@@ -49,6 +49,7 @@ struct Settings {
     bool fullscreen{};
     PresentMode present_mode{PresentMode::Fifo};
     Aspect aspect{Aspect::Original};
+    std::uint32_t fov_percent{100u};  // view width relative to the game's own; profile opt-in
     bool sharp_screen{};               // nearest instead of linear scaling to the window
     bool sharp_textures{};             // nearest instead of linear texture sampling
     std::uint32_t msaa{1u};            // samples per pixel of the game's render targets: 1 (off), 2, 4, 8; at restart

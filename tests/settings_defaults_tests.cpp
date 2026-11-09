@@ -4,6 +4,7 @@
 #include "install/user_data.hpp"
 #include "settings/settings.hpp"
 
+#include <cstdlib>
 #include <filesystem>
 #include <iostream>
 
@@ -68,7 +69,13 @@ void test_portable_folder() {
     check(install::user_data_directory() != portable, "without it the data goes to the user's data folder");
 }
 
-int main() {
+int main(int argc, char **argv) {
+    // Check an environment override through the real settings parser.
+    if (argc == 2) {
+        check(current().fov_percent == static_cast<unsigned>(std::strtoul(argv[1], nullptr, 10)),
+              "FOV override parses and stays within its supported range");
+        return failures ? 1 : 0;
+    }
     test_desktop_is_the_declared_defaults();
     test_portable_folder();
     test_android();

@@ -326,6 +326,18 @@ if(PSPRECOMP_BUILD_TESTS)
     add_test(NAME portablekit_pgd_tests COMMAND portablekit_pgd_tests)
 endif()
 
+# PNG capture encoding, without a window or game.
+if(PSPRECOMP_BUILD_TESTS)
+    add_executable(portablekit_image_write_tests
+        "${PORTABLEKIT_ROOT}/tests/image_write_tests.cpp"
+        "${PORTABLEKIT_ROOT}/host/gpu/image_write.cpp")
+    target_compile_features(portablekit_image_write_tests PRIVATE cxx_std_20)
+    target_include_directories(portablekit_image_write_tests PRIVATE
+        "${PORTABLEKIT_ROOT}/host" "${PORTABLEKIT_ROOT}/third_party")
+    set_target_properties(portablekit_image_write_tests PROPERTIES RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin")
+    add_test(NAME portablekit_image_write_tests COMMAND portablekit_image_write_tests)
+endif()
+
 # Each platform's settings defaults.
 if(PSPRECOMP_BUILD_TESTS)
     add_executable(portablekit_settings_tests
@@ -340,6 +352,12 @@ if(PSPRECOMP_BUILD_TESTS)
     target_link_libraries(portablekit_settings_tests PRIVATE psprecomp_core)
     set_target_properties(portablekit_settings_tests PROPERTIES RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin")
     add_test(NAME portablekit_settings_tests COMMAND portablekit_settings_tests)
+    add_test(NAME portablekit_fov_override_test COMMAND ${CMAKE_COMMAND} -E env
+        PORTABLEKIT_FOV=125 $<TARGET_FILE:portablekit_settings_tests> 125)
+    add_test(NAME portablekit_fov_limit_test COMMAND ${CMAKE_COMMAND} -E env
+        PORTABLEKIT_FOV=200 $<TARGET_FILE:portablekit_settings_tests> 150)
+    add_test(NAME portablekit_fov_invalid_test COMMAND ${CMAKE_COMMAND} -E env
+        PORTABLEKIT_FOV=nan $<TARGET_FILE:portablekit_settings_tests> 100)
 endif()
 
 # The on-screen touch controls: layout, fingers and the stick's maths.
@@ -384,6 +402,7 @@ if(PSPRECOMP_BUILD_TESTS)
         "${PORTABLEKIT_ROOT}/host/profile.cpp"
         "${PORTABLEKIT_ROOT}/host/gpu/texture_decode.cpp"
         "${PORTABLEKIT_ROOT}/host/gpu/texture_pack.cpp"
+        "${PORTABLEKIT_ROOT}/host/gpu/image_write.cpp"
         "${PORTABLEKIT_ROOT}/host/gpu/texture_pack_import.cpp")
     target_include_directories(portablekit_texture_pack_tests PRIVATE
         "${PORTABLEKIT_ROOT}/host" "${PORTABLEKIT_ROOT}/host/gpu" "${PORTABLEKIT_ROOT}/third_party")

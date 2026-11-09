@@ -40,6 +40,7 @@ set(PORTABLEKIT_HOST_SOURCES
     host/input/touch_controls.cpp
     host/input/tilt.cpp
     host/gpu/texture_pack.cpp
+    host/gpu/image_write.cpp
     host/gpu/texture_pack_import.cpp
     host/perf/frame_stats.cpp
     host/perf/perf_overlay.cpp

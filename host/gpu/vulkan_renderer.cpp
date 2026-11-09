@@ -5,6 +5,7 @@
 
 #include "frame_interpolation.hpp"
 #include "frame_pacing.hpp"
+#include "image_write.hpp"
 #include "replacement_textures.hpp"
 #include "texture_decode.hpp"
 #include "triangle_indices.hpp"
@@ -3740,15 +3741,21 @@ void VulkanRenderer::Impl::submit_and_present(VkCommandBuffer commands, VkFence 
 void VulkanRenderer::Impl::write_capture(VkFence fence) {
     wait_fence(fence, "a window capture");
     void *mapped = nullptr;
-    vkMapMemory(device, capture_memory, 0u, VK_WHOLE_SIZE, 0u, &mapped);
+    const bool mapped_ok = vkMapMemory(device, capture_memory, 0u, VK_WHOLE_SIZE, 0u, &mapped) == VK_SUCCESS;
     const bool bgra = swapchain_format == VK_FORMAT_B8G8R8A8_UNORM || swapchain_format == VK_FORMAT_B8G8R8A8_SRGB;
-    if (write_bmp(capture_path, static_cast<const std::uint8_t *>(mapped), capture_extent.width,
-                  capture_extent.height, bgra))
+    const auto *pixels = static_cast<const std::uint8_t *>(mapped);
+    const bool png = std::filesystem::path(capture_path).extension() == ".png";
+    const bool written = mapped_ok && (png
+        ? write_png(install::path_from_utf8(capture_path),
+                    {pixels, std::size_t(capture_extent.width) * capture_extent.height * 4u},
+                    capture_extent.width, capture_extent.height, bgra, true)
+        : write_bmp(capture_path, pixels, capture_extent.width, capture_extent.height, bgra));
+    if (written)
         std::cout << "[render] window " << capture_extent.width << "x" << capture_extent.height << " -> "
                   << capture_path << std::endl;
     else
         std::cout << "[render] cannot write " << capture_path << std::endl;
-    vkUnmapMemory(device, capture_memory);
+    if (mapped_ok) vkUnmapMemory(device, capture_memory);
     vkDestroyBuffer(device, capture_buffer, nullptr);
     vkFreeMemory(device, capture_memory, nullptr);
     capture_buffer = VK_NULL_HANDLE;
@@ -5319,6 +5326,21 @@ bool VulkanRenderer::pump_events() {
             impl_->mouse_buttons |= 1u << event.button.button;
         if (event.type == SDL_EVENT_MOUSE_BUTTON_UP && event.button.button < 32u)
             impl_->mouse_buttons &= ~(1u << event.button.button);
+        if (event.type == SDL_EVENT_KEY_DOWN && event.key.key == SDLK_F12 && !event.key.repeat &&
+            impl_->capture_path.empty()) {
+            try {
+                const auto folder = install::user_data_directory() / "screenshots";
+                std::filesystem::create_directories(folder);
+                const auto stamp = std::chrono::duration_cast<std::chrono::microseconds>(
+                    std::chrono::system_clock::now().time_since_epoch()).count();
+                auto path = folder / ("screenshot-" + std::to_string(stamp) + ".png");
+                for (unsigned suffix = 1; std::filesystem::exists(path); ++suffix)
+                    path = folder / ("screenshot-" + std::to_string(stamp) + "-" + std::to_string(suffix) + ".png");
+                capture_window(install::path_to_utf8(path));
+            } catch (const std::exception &e) {
+                std::cerr << "[render] cannot save screenshot: " << e.what() << std::endl;
+            }
+        }
         if (impl_->event_hook && impl_->event_hook(event)) continue;
         if (event.type == SDL_EVENT_KEY_DOWN && event.key.key == SDLK_F3 && !event.key.repeat && impl_->overlay_ready)
             impl_->overlay_visible = !impl_->overlay_visible;

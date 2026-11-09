@@ -271,6 +271,9 @@ struct GameProfile {
     // where it keeps its projection. Null: the game draws only the PSP's
     // 480:272, and the renderer does not offer to widen it.
     void (*view_aspect_frame)(psprecomp::Runtime &, float aspect) = nullptr;
+    // The profile reads settings::current().fov_percent and adjusts its own
+    // projection and culling. False keeps this setting out of the menu.
+    bool adjustable_fov = false;
 
     // --- Frame interpolation -----------------------------------------------
     // What tells a camera cut from motion when frames are blended

@@ -1,5 +1,6 @@
 #include "../profile.hpp"
 #include "texture_pack.hpp"
+#include "image_write.hpp"
 
 #include <algorithm>
 #include <bit>
@@ -23,11 +24,6 @@
 #define STB_IMAGE_STATIC
 #define STB_IMAGE_IMPLEMENTATION
 #include "stb_image.h"
-
-#define STBI_WRITE_NO_STDIO
-#define STB_IMAGE_WRITE_STATIC
-#define STB_IMAGE_WRITE_IMPLEMENTATION
-#include "stb_image_write.h"
 
 namespace portablekit::gpu {
 namespace {
@@ -702,14 +698,8 @@ void TextureDumper::writer_main() {
         }
         std::error_code ec;
         if (std::filesystem::exists(job.path, ec)) continue;
-        int length = 0;
-        unsigned char *png = stbi_write_png_to_mem(reinterpret_cast<const unsigned char *>(job.pixels.data()),
-                                                   static_cast<int>(job.width * 4u), static_cast<int>(job.width),
-                                                   static_cast<int>(job.height), 4, &length);
-        if (png == nullptr) continue;
-        std::ofstream out(job.path, std::ios::binary);
-        out.write(reinterpret_cast<const char *>(png), length);
-        STBIW_FREE(png);
+        write_png(job.path, {reinterpret_cast<const std::uint8_t *>(job.pixels.data()), job.pixels.size() * 4u},
+                  job.width, job.height, false);
     }
 }
 
