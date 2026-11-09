@@ -272,16 +272,6 @@ void Menu::video() {
             settings::save();
         }
     }
-    if (portablekit::game().adjustable_hud_scale) {
-        int hud = static_cast<int>(s.hud_scale_percent);
-        if (slider_row("Interface size", hud, 50, 100, 5, "%d%%",
-                       options_for("video.hud_scale",
-                                   "Size of the game's on-screen interface, kept against the screen's edges. "
-                                   "100% is the game's own size. Applies from the next area loaded."))) {
-            s.hud_scale_percent = static_cast<std::uint32_t>(hud);
-            settings::save();
-        }
-    }
     if (choice_row("Scaling filter", s.sharp_screen ? "Sharp" : "Smooth",
                    options_for("video.sharp_screen", "How the finished picture is scaled to the window: smooth "
                                                      "(bilinear) or sharp (nearest pixel)."))) {
@@ -463,7 +453,6 @@ void Menu::video() {
         restore("video.aspect", s.aspect, d.aspect);
         restore("video.fov", s.fov_percent, d.fov_percent);
         restore("video.detail_distance", s.detail_distance_percent, d.detail_distance_percent);
-        restore("video.hud_scale", s.hud_scale_percent, d.hud_scale_percent);
         restore("video.sharp_screen", s.sharp_screen, d.sharp_screen);
         restore("video.sharp_textures", s.sharp_textures, d.sharp_textures);
         restore("video.msaa", s.msaa, d.msaa);
