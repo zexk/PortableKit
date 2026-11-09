@@ -267,7 +267,7 @@ void Menu::video() {
         if (slider_row("Detail distance", distance, 100, 400, 25, "%d%%",
                        options_for("video.detail_distance",
                                    "How far away characters switch to their simpler models. 100% is the "
-                                   "game's own distance."))) {
+                                   "game's own distance. Applies from the next area loaded."))) {
             s.detail_distance_percent = static_cast<std::uint32_t>(distance);
             settings::save();
         }
