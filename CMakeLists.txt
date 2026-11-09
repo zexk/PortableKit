@@ -333,6 +333,7 @@ if(PSPRECOMP_BUILD_TESTS)
         "${PORTABLEKIT_ROOT}/tests/test_profile.cpp"
         "${PORTABLEKIT_ROOT}/host/profile.cpp"
         "${PORTABLEKIT_ROOT}/host/settings/settings.cpp"
+        "${PORTABLEKIT_ROOT}/host/app_paths.cpp"
         "${PORTABLEKIT_ROOT}/host/install/user_data.cpp"
         "${PORTABLEKIT_ROOT}/host/input/bindings.cpp")
     target_include_directories(portablekit_settings_tests PRIVATE "${PORTABLEKIT_ROOT}/host")

@@ -12,16 +12,18 @@ namespace portablekit::install {
 //   EBOOT.ELF      the executable prepared from the player's disc image
 //   disc.iso       the copied disc image (absent when the image is used in place)
 //   settings.ini   where the disc image is, and the player's settings
-//
-// Save data is not here yet: ms0 stays where the host has always kept it.
+//   ms0            the memory stick, with the saves
 inline constexpr const char *kExecutableFile = "EBOOT.ELF";
 inline constexpr const char *kCopiedImageFile = "disc.iso";
 // Android: asks the next start to run the setup, as --install does elsewhere.
 inline constexpr const char *kSetupMarkerFile = "setup-requested";
 inline constexpr const char *kSettingsFile = "settings.ini";
+// A folder of this name beside the executable makes the port portable.
+inline constexpr const char *kPortableFolder = "portable";
 
-// <prefix>_DATA_DIR when set, otherwise SDL_GetPrefPath() with the names the
-// profile gives (data_organization, data_application)
+// <prefix>_DATA_DIR when set, then the kPortableFolder beside the executable
+// when it exists (not on Android), otherwise SDL_GetPrefPath() with the names
+// the profile gives (data_organization, data_application)
 // (or the same location computed by hand in a build without SDL). SDL creates
 // the directory if it does not exist yet.
 [[nodiscard]] std::filesystem::path user_data_directory();

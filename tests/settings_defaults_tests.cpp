@@ -1,6 +1,10 @@
-// Which defaults each platform starts from; no settings.ini is read.
+// Which defaults each platform starts from; no settings.ini is read. Also
+// where the data directory is.
+#include "app_paths.hpp"
+#include "install/user_data.hpp"
 #include "settings/settings.hpp"
 
+#include <filesystem>
 #include <iostream>
 
 namespace {
@@ -50,8 +54,23 @@ void test_this_build() {
 
 } // namespace
 
+// A folder named "portable" beside the executable holds the data instead of
+// the user's data folder. One that was there before the test is left alone.
+void test_portable_folder() {
+    namespace fs = std::filesystem;
+    namespace install = portablekit::install;
+    const fs::path portable = portablekit::executable_directory() / install::kPortableFolder;
+    std::error_code ec;
+    const bool made = fs::create_directory(portable, ec);
+    check(install::user_data_directory() == portable, "a portable folder beside the executable holds the data");
+    if (!made) return;
+    fs::remove(portable, ec);
+    check(install::user_data_directory() != portable, "without it the data goes to the user's data folder");
+}
+
 int main() {
     test_desktop_is_the_declared_defaults();
+    test_portable_folder();
     test_android();
     test_this_build();
     if (failures != 0) {

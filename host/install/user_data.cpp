@@ -1,6 +1,8 @@
 #include "../profile.hpp"
 #include "install/user_data.hpp"
 
+#include "app_paths.hpp"
+
 #include "psprecomp/common.hpp"
 
 #include <cstdlib>
@@ -45,6 +47,15 @@ std::filesystem::path path_from_utf8(const std::string &text) {
 
 std::filesystem::path user_data_directory() {
     if (const char *dir = portablekit::env("DATA_DIR"); dir != nullptr && *dir != '\0') return path_from_utf8(dir);
+#if !defined(PORTABLEKIT_ANDROID_APP)
+    // Portable: a folder named "portable" beside the executable holds the
+    // data, saves and settings instead of the user's data folder, so the
+    // port can be moved or kept on a removable drive.
+    if (const std::filesystem::path beside = executable_directory(); !beside.empty()) {
+        std::error_code ec;
+        if (std::filesystem::is_directory(beside / kPortableFolder, ec)) return beside / kPortableFolder;
+    }
+#endif
 #if defined(PORTABLEKIT_HAS_SDL)
     char *pref = SDL_GetPrefPath(portablekit::game().data_organization, portablekit::game().data_application);
     if (pref == nullptr) throw psprecomp::Error(std::string("Cannot determine the user data directory: ") + SDL_GetError());
