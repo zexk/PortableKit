@@ -7634,6 +7634,18 @@ void VulkanRenderer::Impl::replay(VkCommandBuffer commands, std::uint32_t slot, 
     // would be on every present.
     const float s = ahead ? 1.0f - t : t;
     const interpolation::RigidMotion &camera = ahead ? camera_motion_back : camera_motion;
+    // A character's pose (its skinned vertices, or bones) is carried on
+    // less far: limbs swing on arcs, and carried on in straight lines past
+    // the newer frame they overshoot it and stretch, where the camera's and
+    // the objects' own motion keep their course. <prefix>_INTERPOLATION_POSE_LEAD_MS
+    // sets how far, 16.7 by default (half a frame at 30).
+    static const float pose_lead_us = [] {
+        const char *text = portablekit::env("INTERPOLATION_POSE_LEAD_MS");
+        return text != nullptr ? std::clamp(static_cast<float>(std::strtod(text, nullptr)), 0.0f, 100.0f) * 1000.0f
+                               : 16683.0f;
+    }();
+    const float span_us = static_cast<float>(std::max<std::int64_t>(1, newer.moment_us - older.moment_us));
+    const float pose_s = ahead ? std::max(s, -pose_lead_us / span_us) : s;
     breadcrumb(commands, std::string(ahead ? "carried" : "blended") + " present, " + std::to_string(base.groups.size()) +
                              " draw calls");
     Target &target = blend_targets[slot];
@@ -7903,7 +7915,7 @@ void VulkanRenderer::Impl::replay(VkCommandBuffer commands, std::uint32_t slot, 
                 if (a.format == b.format) {
                     RawBlock blended = a;
                     for (std::size_t i = 0; i < blended.bones.size(); ++i)
-                        blended.bones[i] += (b.bones[i] - blended.bones[i]) * s;
+                        blended.bones[i] += (b.bones[i] - blended.bones[i]) * pose_s;
                     const VkDeviceSize at =
                         (scratch_at + uniform_alignment - 1u) / uniform_alignment * uniform_alignment;
                     if (at + sizeof(RawBlock) <= scratch_end) {
@@ -7952,12 +7964,12 @@ void VulkanRenderer::Impl::replay(VkCommandBuffer commands, std::uint32_t slot, 
                         GpuVertex *o = out + (from_start - drawn.skinned);
                         for (std::uint32_t v = 0; v < from_end - from_start; ++v) {
                             GpuVertex blended = f[v];
-                            blended.x += (b[v].x - blended.x) * s;
-                            blended.y += (b[v].y - blended.y) * s;
-                            blended.z += (b[v].z - blended.z) * s;
-                            blended.nx += (b[v].nx - blended.nx) * s;
-                            blended.ny += (b[v].ny - blended.ny) * s;
-                            blended.nz += (b[v].nz - blended.nz) * s;
+                            blended.x += (b[v].x - blended.x) * pose_s;
+                            blended.y += (b[v].y - blended.y) * pose_s;
+                            blended.z += (b[v].z - blended.z) * pose_s;
+                            blended.nx += (b[v].nx - blended.nx) * pose_s;
+                            blended.ny += (b[v].ny - blended.ny) * pose_s;
+                            blended.nz += (b[v].nz - blended.nz) * pose_s;
                             o[v] = blended;
                         }
                     }
