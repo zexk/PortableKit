@@ -97,6 +97,7 @@ fs::path backups_directory() {
     }
 }
 
+#if !defined(_WIN32)
 // Percent-encodes a path for a file:// URL.
 std::string file_url(const std::string &path) {
     std::string url = "file://";
@@ -111,6 +112,7 @@ std::string file_url(const std::string &path) {
     }
     return url;
 }
+#endif
 
 // The Flatpak reads the player's folders but writes only to its own data
 // directory and to Downloads, so an export or a backup elsewhere fails there.
@@ -583,7 +585,15 @@ bool open_folder(const fs::path &folder) {
     std::error_code ec;
     fs::create_directories(folder, ec);
     const std::string path = utf8(folder);
-    if (SDL_OpenURL(file_url(path).c_str())) return true;
+#if defined(_WIN32)
+    // SDL hands the text to ShellExecuteW, which opens a folder by its path.
+    // As a file:// URL with the drive's colon and the backslashes
+    // percent-encoded it is refused: "Couldn't open given URL".
+    const std::string target = utf8(fs::path(folder).make_preferred());
+#else
+    const std::string target = file_url(path);
+#endif
+    if (SDL_OpenURL(target.c_str())) return true;
     std::cout << "[menu] cannot open " << path << ": " << SDL_GetError() << "\n";
     return false;
 }
