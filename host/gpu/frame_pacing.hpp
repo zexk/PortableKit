@@ -29,6 +29,15 @@
 // than keep every present late for two seconds. At 60 a frame is on screen as
 // it is 16.7 ms plus that time after its moment; without interpolation it is
 // shown when its code has run.
+//
+// A lead shortens that wait: presents come that much earlier, and a grid
+// moment less than the first step plus the lead into its frame, whose next
+// frame is not there yet, is shown by carrying the newest frame's motion on
+// (a blend factor above 1) instead of waiting. Every present still shows its
+// grid moment. At the full lead a frame is on screen when its code has run,
+// as without interpolation; the price is a brief overshoot when motion stops
+// or turns. At 60 any lead carries every halfway present on, so it is all
+// or nothing there.
 namespace portablekit::gpu::pacing {
 
 // Two vblanks of the PSP's display, in microseconds (kernel kVBlankPeriodUs):
@@ -62,6 +71,13 @@ public:
     // proportionally more presents per frame (flip()).
     void set_presents_per_frame(double presents) noexcept;
     [[nodiscard]] double presents_per_frame() const noexcept { return per_frame_; }
+    // How much of the wait for the next frame presents skip, 0 to 1: 0
+    // waits for it (no blend factor above 1), 1 shows each frame as soon as
+    // its code has run.
+    void set_lead(double fraction) noexcept;
+    [[nodiscard]] double lead() const noexcept { return lead_; }
+    // The lead in time: that fraction of the frame less the first step.
+    [[nodiscard]] std::int64_t lead_us() const noexcept;
     // A new game frame, for the moment `time_us` of real time, flipped at
     // `now_us`.
     void flip(std::int64_t time_us, std::int64_t now_us) noexcept;
@@ -72,7 +88,7 @@ public:
     [[nodiscard]] std::optional<std::int64_t> next_due() const noexcept;
     struct Present {
         std::int64_t time_us{};    // the grid moment it was due at
-        float t{};                 // 0 shows the older frame, 1 the newer one
+        float t{};                 // 0 shows the older frame, 1 the newer one, above 1 past it (lead)
         std::uint32_t skipped{};   // grid moments passed over since the last present
     };
     // The latest present due at `now_us`, if one is; it counts as done.
@@ -95,14 +111,21 @@ public:
 private:
     // Spaces the grid for the presents asked for over frames of frame_us_.
     void apply_grid() noexcept;
+    // The grid moments' offsets into their frames, over the frames after
+    // which the grid repeats, and through them first_step_us_ and reach_us_.
+    void apply_offsets() noexcept;
     // The grid moment `index`, and when it is presented.
     [[nodiscard]] std::int64_t moment(std::int64_t index) const noexcept;
     [[nodiscard]] std::int64_t due(std::int64_t index) const noexcept { return moment(index) + delay_us(); }
 
     double requested_{1.0};  // presents per frame of game_frame_us()
+    double lead_{};          // set_lead
     double per_frame_{1.0};  // presents per frame of frame_us_
     // The shortest step from a frame's moment to the next grid moment.
     std::int64_t first_step_us_{game_frame_us()};
+    // The furthest a present on time shows past the newer frame with the
+    // lead: the largest grid offset below the first step plus the lead.
+    std::int64_t reach_us_{};
     std::int64_t work_us_{kWorkMarginUs};
     std::vector<std::int64_t> work_window_;  // the last frames' code time, oldest first
     std::size_t work_cursor_{};

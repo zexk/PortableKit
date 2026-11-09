@@ -350,9 +350,10 @@ void rates() {
 // it is due, checked every 250 us. Returns each present's blend factor, and
 // checks that the moment shown never goes back.
 std::vector<float> run_clock(double rate, std::int64_t work_us, int frames, bool &monotonic, std::uint32_t &skipped,
-                             std::int64_t late_frame = -1) {
+                             std::int64_t late_frame = -1, double lead = 0.0) {
     PresentClock clock;
     clock.set_presents_per_frame(presents_per_frame(rate));
+    clock.set_lead(lead);
     std::vector<float> factors;
     monotonic = true;
     skipped = 0u;
@@ -450,6 +451,37 @@ void present_clock() {
         steady.flip(frame * kGameFrameUs, frame * kGameFrameUs + code);
     }
     check(steady.work_us() == 21000, "one frame in five that slow does");
+
+    // A lead: presents come earlier and show grid moments past the newest
+    // frame by carrying it on, every one still at its own moment.
+    const std::vector<float> ahead60 = run_clock(60.0, 12000, 40, monotonic, skipped, -1, 1.0);
+    check(pattern(ahead60, {1.0f, 1.5f}, 4u) && monotonic && skipped == 0u,
+          "60 with a lead: each frame as it is, then carried halfway on");
+    const std::vector<float> ahead45 = run_clock(45.0, 12000, 40, monotonic, skipped, -1, 0.5);
+    check(pattern(ahead45, {1.0f, 2.0f / 3.0f, 4.0f / 3.0f}, 4u) && monotonic && skipped == 0u,
+          "45 with half the lead: the moment a third into a frame is carried on, two thirds is blended");
+    // At 144 the grid never quite meets the frames, so without a lead the
+    // delay is nearly a whole frame; with the full lead a present needs the
+    // next frame only when it falls within the code's margin before it.
+    const std::vector<float> ahead144 = run_clock(144.0, 4000, 60, monotonic, skipped, -1, 1.0);
+    const auto carried = std::count_if(ahead144.begin() + 8, ahead144.end(), [](float t) { return t > 1.001f; });
+    check(monotonic && skipped == 0u &&
+              std::all_of(ahead144.begin() + 8, ahead144.end(), [](float t) { return t > 0.95f && t < 2.0f; }) &&
+              carried * 10 > static_cast<std::ptrdiff_t>(ahead144.size() - 8u) * 9,
+          "144 with the full lead: nearly every present carries the newest frame on");
+    run_clock(60.0, 12000, 40, monotonic, skipped, 20, 1.0);
+    check(monotonic, "a late frame with a lead holds rather than going back");
+    PresentClock leading;
+    leading.set_presents_per_frame(2.0);
+    leading.set_lead(1.0);
+    leading.flip(0, 5000);
+    leading.flip(kGameFrameUs, kGameFrameUs + 5000);
+    check(leading.delay_us() == 6000, "at the full lead the delay is the game's code time alone");
+    check(near(leading.blend_at(kGameFrameUs + kGameFrameUs), 1.5f),
+          "a frame late by a whole frame is held half a frame on, not carried further");
+    leading.set_lead(0.0);
+    check(leading.delay_us() == kGameFrameUs / 2 + 6000 && leading.blend_at(3 * kGameFrameUs) == 1.0f,
+          "without a lead nothing changes");
 }
 
 Second second_with(double speed, double idle_ms, double blend_ms, double plain_ms, double rate) {

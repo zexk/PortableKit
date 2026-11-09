@@ -57,17 +57,7 @@ void PresentClock::set_presents_per_frame(double presents) noexcept {
 void PresentClock::apply_grid() noexcept {
     per_frame_ = requested_ <= 1.0 ? requested_
                                    : requested_ * static_cast<double>(frame_us_) / static_cast<double>(game_frame_us());
-    first_step_us_ = frame_us_;
-    if (per_frame_ > 1.0) {
-        // The grid repeats after the few frames plain_presents_per_frame
-        // finds; the smallest offset of a grid moment into its frame over
-        // them is the first step.
-        const double step = static_cast<double>(frame_us_) / per_frame_;
-        for (int index = 1; index <= 64; ++index) {
-            const auto offset = static_cast<std::int64_t>(std::llround(index * step)) % frame_us_;
-            if (offset > 0) first_step_us_ = std::min(first_step_us_, offset);
-        }
-    }
+    apply_offsets();
     // The grid's spacing changed: start it again at the newest frame.
     anchored_ = false;
     if (has_newer_) {
@@ -77,12 +67,40 @@ void PresentClock::apply_grid() noexcept {
     }
 }
 
+void PresentClock::apply_offsets() noexcept {
+    // The grid repeats after the few frames plain_presents_per_frame finds;
+    // the smallest offset of a grid moment into its frame over them is the
+    // first step.
+    first_step_us_ = frame_us_;
+    reach_us_ = 0;
+    if (per_frame_ <= 1.0) return;
+    const double step = static_cast<double>(frame_us_) / per_frame_;
+    const auto offset = [&](int index) { return static_cast<std::int64_t>(std::llround(index * step)) % frame_us_; };
+    for (int index = 1; index <= 64; ++index)
+        if (offset(index) > 0) first_step_us_ = std::min(first_step_us_, offset(index));
+    if (lead_ <= 0.0) return;
+    const std::int64_t below = first_step_us_ + lead_us();
+    for (int index = 1; index <= 64; ++index)
+        if (offset(index) < below) reach_us_ = std::max(reach_us_, offset(index));
+}
+
+void PresentClock::set_lead(double fraction) noexcept {
+    fraction = std::clamp(fraction, 0.0, 1.0);
+    if (fraction == lead_) return;
+    lead_ = fraction;
+    apply_offsets();
+}
+
 void PresentClock::reset() noexcept {
     has_newer_ = has_older_ = anchored_ = false;
     next_index_ = 0;
 }
 
-std::int64_t PresentClock::delay_us() const noexcept { return frame_us_ - first_step_us_ + work_us_; }
+std::int64_t PresentClock::lead_us() const noexcept {
+    return std::llround(lead_ * static_cast<double>(frame_us_ - first_step_us_));
+}
+
+std::int64_t PresentClock::delay_us() const noexcept { return frame_us_ - first_step_us_ + work_us_ - lead_us(); }
 
 void PresentClock::flip(std::int64_t time_us, std::int64_t now_us) noexcept {
     if (has_newer_ && (time_us <= newer_us_ || time_us - newer_us_ > kGapFrames * frame_us_)) reset();
@@ -144,8 +162,14 @@ std::optional<std::int64_t> PresentClock::next_due() const noexcept {
 
 float PresentClock::blend_at(std::int64_t time_us) const noexcept {
     if (!has_older_ || newer_us_ <= older_us_) return 1.0f;
-    const double t = static_cast<double>(time_us - older_us_) / static_cast<double>(newer_us_ - older_us_);
-    return static_cast<float>(std::clamp(t, 0.0, 1.0));
+    const double span = static_cast<double>(newer_us_ - older_us_);
+    const double t = static_cast<double>(time_us - older_us_) / span;
+    // With a lead, a grid moment less than the first step plus the lead into
+    // its frame comes before the next frame does, and is shown past the newer
+    // one by its offset; no further than the largest such offset: a frame
+    // later than the delay allows for holds the picture there rather than
+    // overshoot more.
+    return static_cast<float>(std::clamp(t, 0.0, 1.0 + static_cast<double>(reach_us_) / span));
 }
 
 std::optional<PresentClock::Present> PresentClock::take(std::int64_t now_us) noexcept {
