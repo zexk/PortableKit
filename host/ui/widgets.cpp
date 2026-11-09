@@ -62,6 +62,7 @@ struct Row {
     ImVec2 min;
     ImVec2 max;
     bool pressed{};
+    bool clicked{};  // pressed by the mouse or a touch, not by Enter or the pad
     bool focused{};
     bool hovered{};
 };
@@ -74,6 +75,7 @@ Row row(const char *label, const RowOptions &options, ImU32 color = colors::kTex
     const float width = ImGui::GetContentRegionAvail().x;
     result.max = {result.min.x + width, result.min.y + height};
     result.pressed = ImGui::InvisibleButton(label, {width, height}, ImGuiButtonFlags_EnableNav);
+    result.clicked = result.pressed && ImGui::GetIO().MouseReleased[ImGuiMouseButton_Left];
     take_focus();
     result.focused = ImGui::IsItemFocused();
     result.hovered = ImGui::IsItemHovered();
@@ -386,11 +388,12 @@ int choice_row(const char *label, const std::string &value, const RowOptions &op
     const float left_arrow_x = value_x - font() * 0.65f;
     int delta = r.focused ? horizontal_press() : 0;
     if (r.pressed) {
-        // A click on the left arrow steps back; anything else steps forward.
+        // Enter or the pad's confirm steps forward. A click changes the value
+        // only on it or its arrows (the left one steps back); a click on the
+        // label selects the row, so its description shows.
         const float mouse_x = ImGui::GetIO().MousePos.x;
-        const bool on_left_arrow = ImGui::GetIO().MouseReleased[0] && mouse_x > left_arrow_x - font() &&
-                                   mouse_x < left_arrow_x + font() * 0.6f;
-        delta = on_left_arrow ? -1 : 1;
+        if (!r.clicked) delta = 1;
+        else if (mouse_x > left_arrow_x - font()) delta = mouse_x < left_arrow_x + font() * 0.6f ? -1 : 1;
     }
     const bool live = r.focused || r.hovered;
     ImDrawList *draw = ImGui::GetWindowDrawList();
@@ -406,14 +409,19 @@ int choice_row(const char *label, const std::string &value, const RowOptions &op
 bool toggle_row(const char *label, bool value, const RowOptions &options) {
     const Row r = row(label, options);
     const int delta = r.focused ? horizontal_press() : 0;
-    const bool toggled = !options.disabled && (r.pressed || (delta > 0 && !value) || (delta < 0 && value));
-
-    ImDrawList *draw = ImGui::GetWindowDrawList();
     const float height = font() * 0.95f;
     const float width = height * 1.9f;
     const float mid_y = (r.min.y + r.max.y) * 0.5f;
     const ImVec2 max{r.max.x - px(16.0f), mid_y + height * 0.5f};
     const ImVec2 min{max.x - width, mid_y - height * 0.5f};
+    // A click on the switch or its On/Off flips it; one on the label selects
+    // the row, so its description shows.
+    const float value_x = min.x - px(12.0f) - ImGui::CalcTextSize("Off").x - font() * 0.5f;
+    const bool on_switch = !r.clicked || ImGui::GetIO().MousePos.x >= value_x;
+    const bool toggled =
+        !options.disabled && ((r.pressed && on_switch) || (delta > 0 && !value) || (delta < 0 && value));
+
+    ImDrawList *draw = ImGui::GetWindowDrawList();
     const bool on = toggled ? !value : value;
     const ImU32 track = options.disabled ? colors::kTrack : on ? colors::kAccent : colors::kTrack;
     draw->AddRectFilled(min, max, track, height * 0.5f);
