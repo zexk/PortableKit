@@ -47,7 +47,8 @@ std::map<std::uint32_t, UserModule> &modules() {
 // links them; the caller's jal has already set ra.
 void bind_export(Runtime &runtime, const std::string &library, std::uint32_t nid, std::uint32_t address) {
     static const bool trace = env("TRACE_MODULES") != nullptr;
-    const std::string label = library + "::" + psprecomp::hex32(nid);
+    const std::string label = library + "::" + psprecomp::hex32(nid) + "@" + psprecomp::hex32(address);
+    if (trace) std::cerr << "[module-export] " << label << "\n";
     runtime.register_hle(library, nid, [address, label](Runtime &rt, AllegrexContext &ctx) {
         std::string text;  // a0 as a string, when it points at one
         if (trace && rt.memory().contains(ctx.gpr[4], 1u)) {
