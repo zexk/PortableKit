@@ -277,7 +277,7 @@ void Menu::video() {
         if (slider_row("Interface size", hud, 50, 100, 5, "%d%%",
                        options_for("video.hud_scale",
                                    "Size of the game's on-screen interface, kept against the screen's edges. "
-                                   "100% is the game's own size."))) {
+                                   "100% is the game's own size. Applies from the next area loaded."))) {
             s.hud_scale_percent = static_cast<std::uint32_t>(hud);
             settings::save();
         }
