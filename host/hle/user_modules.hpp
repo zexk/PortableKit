@@ -33,7 +33,9 @@ bool start_user_module(psprecomp::Runtime &runtime, psprecomp::AllegrexContext &
 // that has not been checked yet, installs the module's recompiled corpus
 // (overlays.hpp) when one matches its code as it now is in memory, and
 // returns true to retry; otherwise, with <prefix>_DUMP_MODULES=<dir>, writes
-// that code to <dir>/<id>.bin for recompilation and returns false.
+// that code to <dir>/<id>.bin, with its startup address in <id>.entry, for
+// recompilation and returns false. Startup and post-link images are matched
+// separately; an instruction-cache flush invalidates the previous match.
 bool user_module_code_miss(psprecomp::Runtime &runtime, psprecomp::AllegrexContext &ctx, std::uint32_t pc);
 
 // While set, a module's first run after its code was patched (flushed from

@@ -88,8 +88,9 @@ std::optional<std::uint32_t> load_user_module(Runtime &runtime, std::span<const 
     if (!info) throw psprecomp::Error("module info not found in " + where);
 
     // An entry of -1 means no start function, as for a pure library.
-    UserModule module{info->name, block, base, size, elf.segments().front().file_size, false, elf.entry() == 0xFFFFFFFFu ? 0u : elf.runtime_entry(base)};
-    module.started = module.start == 0u;
+    UserModule module{.name = info->name, .block = block, .base = base,
+                      .size = size, .code_size = elf.segments().front().file_size,
+                      .start = elf.entry() == 0xFFFFFFFFu ? 0u : elf.runtime_entry(base)};
     std::size_t exported = 0u;
     for (std::uint32_t cursor = info->ent_top; cursor < info->ent_end;) {
         const std::uint32_t libname = runtime.memory().load32(cursor);
@@ -110,6 +111,8 @@ std::optional<std::uint32_t> load_user_module(Runtime &runtime, std::span<const 
         }
         cursor += length;
     }
+
+    module.started = module.start == 0u;
 
     // The module's own imports: stubs the interpreter can call, and a logged
     // failure for any the HLE and the loaded modules do not provide.
@@ -170,6 +173,9 @@ void dump_module_code(const UserModule &module, const std::vector<std::uint8_t> 
         std::filesystem::create_directories(directory);
         std::ofstream(std::filesystem::path(directory) / (id.str() + ".bin"), std::ios::binary)
             .write(reinterpret_cast<const char *>(code.data()), static_cast<std::streamsize>(code.size()));
+        if (module.start != 0u)
+            std::ofstream(std::filesystem::path(directory) / (id.str() + ".entry"))
+                << psprecomp::hex32(module.start) << "\n";
         if (!module.inner_stubs.empty()) {
             std::ofstream stubs(std::filesystem::path(directory) / (id.str() + ".stubs"));
             for (const auto &[start, end] : module.inner_stubs) stubs << std::hex << start << "-" << end << "\n";
@@ -189,12 +195,9 @@ void set_skip_module_first_run(bool skip) { g_skip_first_run = skip; }
 bool user_module_code_miss(Runtime &runtime, AllegrexContext &ctx, std::uint32_t pc) {
     for (auto &[uid, module] : modules()) {
         if (pc < module.base || pc >= module.base + module.code_size || module.code_checked) continue;
-        // A loader may fix up a module's code once module_start has run:
-        // Metal Gear Solid Portable Ops starts a stage, which registers its
-        // entry points, patches the stage's jumps into the engine, then calls
-        // them. So a module is identified at its first run after module_start
-        // returned, as its code is then, and interpreted until that point.
-        if (!module.started) return false;
+        // Match the PRX-relocated startup image too. The guest's instruction
+        // cache flush after linking drops this corpus, so the next dispatch
+        // identifies the patched image instead.
         module.code_checked = true;
         std::vector<std::uint8_t> code(module.code_size);
         for (std::uint32_t i = 0; i < module.code_size; ++i) code[i] = runtime.memory().load8(module.base + i);
@@ -203,7 +206,7 @@ bool user_module_code_miss(Runtime &runtime, AllegrexContext &ctx, std::uint32_t
         const bool installed = install_module_corpus(runtime, module.base, code);
         if (installed)
             std::cout << "[module] " << module.name << " at " << psprecomp::hex32(module.base) << ": recompiled code (first run at " << psprecomp::hex32(pc) << ")\n";
-        if (game().module_code_ready != nullptr) game().module_code_ready(runtime, module.name, module.base, code);
+        if (module.started && game().module_code_ready != nullptr) game().module_code_ready(runtime, module.name, module.base, code);
         const bool skip = g_skip_first_run && module.invalidated;
         if (installed && !skip) return true;
         if (installed) {
@@ -215,8 +218,6 @@ bool user_module_code_miss(Runtime &runtime, AllegrexContext &ctx, std::uint32_t
         if (!skip) return false;
         ctx.pc = ctx.gpr[31];
         return true;
-        dump_module_code(module, code, hash);
-        return false;
     }
     return false;
 }

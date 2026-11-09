@@ -514,6 +514,26 @@ if(PSPRECOMP_BUILD_TESTS)
     add_test(NAME portablekit_io_filter_tests COMMAND portablekit_io_filter_tests)
 endif()
 
+# Module startup and post-link invalidation, using the real miss handler and
+# a stand-in corpus lookup instead of game code or dynamic libraries.
+if(PSPRECOMP_BUILD_TESTS)
+    set(_module_test_sources ${_io_test_sources})
+    list(REMOVE_ITEM _module_test_sources "${PORTABLEKIT_ROOT}/host/hle/user_modules.cpp")
+    add_executable(portablekit_module_startup_tests
+        "${PORTABLEKIT_ROOT}/tests/user_module_startup_tests.cpp" ${_module_test_sources})
+    target_compile_features(portablekit_module_startup_tests PRIVATE cxx_std_20)
+    target_include_directories(portablekit_module_startup_tests PRIVATE
+        "${PORTABLEKIT_ROOT}/host" "${PORTABLEKIT_ROOT}/third_party"
+        "${CMAKE_CURRENT_BINARY_DIR}/host_check_nids")
+    target_link_libraries(portablekit_module_startup_tests PRIVATE psprecomp_core Threads::Threads ${CMAKE_DL_LIBS})
+    _portablekit_link_hle_extensions(portablekit_module_startup_tests)
+    if(WIN32)
+        target_link_libraries(portablekit_module_startup_tests PRIVATE ws2_32 iphlpapi)
+    endif()
+    set_target_properties(portablekit_module_startup_tests PROPERTIES RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin")
+    add_test(NAME portablekit_module_startup_tests COMMAND portablekit_module_startup_tests)
+endif()
+
 # The desktop app's keys file as extension modules look keys up in it. The
 # values of PortableKit's own keys come from crypto_keys_builtin.cpp, compiled
 # under other names (tests/builtin_keys_renamed.cpp) beside the app's own.

@@ -8,7 +8,7 @@ the analyzer treats the whole blob as code. Each --exclude START-END (byte
 offsets into the dump) is left out of .text, which is then split around it:
 import stubs inside a module's code, which must be reached through the HLE.
 
-Usage: wrap_overlay.py <overlay.bin> <base_address> <output.elf> [--exclude START-END ...]
+Usage: wrap_overlay.py <overlay.bin> <base_address> <output.elf> [--exclude START-END ...] [--entry ADDRESS]
 """
 
 import struct
@@ -22,9 +22,13 @@ SHSTRTAB = b"\0.text\0.shstrtab\0"
 
 def main(argv):
     excluded = []
-    while len(argv) > 4 and argv[-2] == "--exclude":
-        start, end = (int(text, 0) for text in argv[-1].split("-"))
-        excluded.append((start, end))
+    entry = None
+    while len(argv) > 4 and argv[-2] in ("--exclude", "--entry"):
+        if argv[-2] == "--entry":
+            entry = int(argv[-1], 0)
+        else:
+            start, end = (int(text, 0) for text in argv[-1].split("-"))
+            excluded.append((start, end))
         argv = argv[:-2]
     if len(argv) != 4:
         print(__doc__.strip(), file=sys.stderr)
@@ -33,6 +37,12 @@ def main(argv):
     base = int(argv[2], 0)
     if base % 4:
         print("base address must be 4-byte aligned", file=sys.stderr)
+        return 1
+
+    if entry is None:
+        entry = base
+    if entry % 4 or not base <= entry < base + len(data):
+        print("entry must be aligned and inside the image", file=sys.stderr)
         return 1
 
     data_offset = EHDR_SIZE + PHDR_SIZE
@@ -52,7 +62,7 @@ def main(argv):
         2,            # ET_EXEC
         8,            # EM_MIPS
         1,            # version
-        base,         # entry
+        entry,        # entry
         EHDR_SIZE,    # phoff
         shdr_offset,  # shoff
         0x10A23001,   # flags, as produced by the PSP toolchain
