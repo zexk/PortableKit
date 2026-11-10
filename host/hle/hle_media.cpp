@@ -188,6 +188,9 @@ struct EarlyPresent {
     // See pace_at_pad_read().
     bool ahead = false;                    // emulated time was let run ahead since the last controller read
     std::optional<std::uint64_t> moment;   // the vblank whose real time the next early frame stands for
+    // For the pacing trace: host time since the last early present spent in
+    // display lists and in the presents frame interpolation makes between.
+    perf::Clock::duration lists{}, polled{};
 };
 
 EarlyPresent &early_present() {
@@ -253,6 +256,7 @@ void run_ge_list(Runtime &rt, std::uint32_t id) {
         finished = true;
     }
     list.done = finished;
+    early_present().lists += perf::Clock::now() - start;
     early_present().drawn = true;
     if (vram_offset(media().ge.target().color_address) == early_present().shown) early_present().shown = EarlyPresent::kNone;
     media().ge.set_draw_sink(nullptr);
@@ -325,6 +329,34 @@ std::optional<std::uint64_t> &frame_vblank_override() {
     return vblank;
 }
 
+#if defined(PORTABLEKIT_HAS_RENDERER)
+// The game's flip is the camera's frame: the camera update runs once between
+// two flips, however many presents interpolation adds. The stick is already
+// shaped and inverted by the input layer; its rate becomes degrees over the
+// real time since the previous step. `fresh` takes the stick and the mouse as
+// they are now and hands this step's own turn to the game, rather than the
+// turn built up by the step before.
+void camera_step(Runtime &rt, gpu::VulkanRenderer &renderer, bool fresh) {
+    const perf::Clock::time_point now = perf::Clock::now();
+    static perf::Clock::time_point previous = now;
+    const float seconds = std::chrono::duration<float>(now - previous).count();
+    previous = now;
+    if (fresh) {
+        if (!renderer.pump_events()) rt.stop("window closed");
+        renderer.sample_pad();
+        feed_mouse(renderer);
+    }
+    camera::set_rate(camera::Source::Stick, (static_cast<int>(renderer.pad().right_x) - 0x80) / 127.0f,
+                     (static_cast<int>(renderer.pad().right_y) - 0x80) / 127.0f);
+    if (fresh) camera::advance(seconds, camera::game_camera_degrees_per_second());
+    camera::game_camera_frame(rt);
+    // The view's shape follows the picture's: the game builds its next
+    // projection with the aspect ratio of the target it will draw into.
+    camera::game_aspect_frame(rt, renderer.game_aspect());
+    if (!fresh) camera::advance(seconds, camera::game_camera_degrees_per_second());
+}
+#endif
+
 void present_frame(Runtime &rt) {
     load_trace::note_flip();
     // Overlays are swapped between frames; re-check before drawing the next one.
@@ -374,22 +406,9 @@ void present_frame(Runtime &rt) {
     // The frame's camera has been measured by now, so the hunt for the guest
     // variables behind it can compare RAM against it.
     probe::camera_frame(rt, media().ge.view_matrix_source());
-    // The game's flip is the camera's frame: the camera update runs once
-    // between two flips, however many presents interpolation adds. The stick is
-    // already shaped and inverted by the input layer; its rate becomes degrees
-    // over the real time since the previous flip.
-    {
-        static perf::Clock::time_point previous_flip = present_start;
-        const float seconds = std::chrono::duration<float>(present_start - previous_flip).count();
-        previous_flip = present_start;
-        camera::set_rate(camera::Source::Stick, (static_cast<int>(renderer.pad().right_x) - 0x80) / 127.0f,
-                         (static_cast<int>(renderer.pad().right_y) - 0x80) / 127.0f);
-        camera::game_camera_frame(rt);
-        // The view's shape follows the picture's: the game builds its next
-        // projection with the aspect ratio of the target it will draw into.
-        camera::game_aspect_frame(rt, renderer.game_aspect());
-        camera::advance(seconds, camera::game_camera_degrees_per_second());
-    }
+    // An early frame paced at the controller read has its camera step there,
+    // after the wait, from the stick as it is then.
+    if (!frame_vblank_override()) camera_step(rt, renderer, false);
     perf::add_render_time(perf::Clock::now() - present_start);
     // A frame ends when its image has been handed to the swapchain, or with
     // frame interpolation when the presents after it are scheduled.
@@ -462,6 +481,9 @@ void present_drawn_target(Runtime &rt) {
         return;
     early.drawn = false;
     trace_pacing("present early", target);
+    trace_pacing("  us in display lists", std::chrono::duration_cast<std::chrono::microseconds>(early.lists).count());
+    trace_pacing("  us in presents between", std::chrono::duration_cast<std::chrono::microseconds>(early.polled).count());
+    early.lists = early.polled = {};
     media().display.framebuffer = target;
     stall_watchdog::note_frame();
     frame_vblank_override() = pace_at_pad_read() ? early.moment : std::nullopt;
@@ -703,6 +725,9 @@ void register_display_ctrl(HleRegistrar &hle) {
             if (std::exchange(early.ahead, false)) {
                 present_drawn_target(rt);
                 kernel().hold_to_real_time();
+#if defined(PORTABLEKIT_HAS_RENDERER)
+                if (media().renderer && media().renderer->available()) camera_step(rt, *media().renderer, true);
+#endif
             }
             early.moment = kernel().last_vblank_us();
             early.ahead = true;
@@ -1327,7 +1352,9 @@ gpu::VulkanRenderer *ensure_renderer() {
         if (gpu::VulkanRenderer *active = active_renderer()) active->present_until(wake);
     });
     kernel().set_poll_hook([] {
+        const perf::Clock::time_point start = perf::Clock::now();
         if (gpu::VulkanRenderer *active = active_renderer()) active->present_due();
+        early_present().polled += perf::Clock::now() - start;
     });
     return media().renderer.get();
 }
