@@ -177,8 +177,13 @@ void block_transfer(Runtime &rt, const gpu::BlockTransfer &transfer) {
 struct EarlyPresent {
     static constexpr std::uint32_t kNone = ~0u;
     std::array<std::uint32_t, 2> flipped{kNone, kNone}; // VRAM offsets of the last two display buffers
-    std::uint32_t shown = kNone;                        // presented at a draw sync, its flip still to come
+    std::uint32_t shown = kNone;                        // presented early, its flip still to come
+    std::uint32_t previous = kNone;                     // on screen before it: a flip back shows nothing new
+    std::uint32_t skipped = 0;                          // flips passed over since the last early present
     bool drawn = false;                                 // a display list ran since the last early present
+    // <prefix>_PACE_AT_PAD_READ (with the setting above), see pace_at_pad_read().
+    bool ahead = false;                    // emulated time was let run ahead since the last controller read
+    std::optional<std::uint64_t> moment;   // the vblank whose real time the next early frame stands for
 };
 
 EarlyPresent &early_present() {
@@ -187,6 +192,22 @@ EarlyPresent &early_present() {
 }
 
 bool present_at_draw_sync() { return settings::current().present_at_draw_sync; }
+
+// <prefix>_PACE_AT_PAD_READ=1, with frames shown early: a game whose loop is
+// "flip, draw, read the pad, update, wait for vblanks" has the wait between
+// reading the pad and drawing what came of it. After a read, emulated time
+// then runs ahead of real time through those waits, and the next read shows
+// the frame drawn just before it and waits for real time there: in real time
+// the loop becomes "read the pad, update, flip, draw, show, wait" and the pad
+// is a frame of the game younger. The frame stands for the real time of the
+// vblank before the previous read, a whole frame of the game after the one
+// before it. The kernel ends the running ahead by itself when no read comes
+// (Kernel::release_pacing), so a loop that stops reading the pad is held as
+// usual.
+bool pace_at_pad_read() {
+    static const bool value = portablekit::env("PACE_AT_PAD_READ") != nullptr;
+    return value && present_at_draw_sync();
+}
 
 constexpr std::uint32_t vram_offset(std::uint32_t address) { return address & (kEdramSize - 1u); }
 
@@ -274,17 +295,32 @@ void feed_mouse(gpu::VulkanRenderer &renderer) {
 // kept on a grid of the game's frame (GameProfile::frame_vblanks) from the
 // one before: the latest start on that grid not after the latest vblank. A
 // flip that comes before a whole step, or two steps late, starts the grid
-// again at its latest vblank.
+// again at its latest vblank, and so does a flip as far from the one before
+// as that one was from its own.
 std::uint64_t frame_start_us(std::uint64_t latest_vblank_us) {
-    static std::uint64_t previous = 0u;
+    static std::uint64_t previous = 0u, latest = 0u, spacing = 0u;
     static bool known = false;
     static const std::uint64_t kStep = std::max<std::uint64_t>(portablekit::game().frame_vblanks, 1u) * kVBlankPeriodUs;
+    // Two flips the same distance apart are the game's own cadence, whatever
+    // the profile says its frame is: a game that goes from two vblanks a
+    // frame to three would otherwise sit a vblank early on the grid for good.
+    const std::uint64_t apart = latest_vblank_us - latest;
+    const bool steady = known && apart == spacing;
+    spacing = apart;
+    latest = latest_vblank_us;
     std::uint64_t start = latest_vblank_us;
-    if (known && latest_vblank_us >= previous + kStep && latest_vblank_us < previous + 3u * kStep)
+    if (!steady && known && latest_vblank_us >= previous + kStep && latest_vblank_us < previous + 3u * kStep)
         start = previous + kStep * ((latest_vblank_us - previous) / kStep);
     previous = start;
     known = true;
     return start;
+}
+
+// The vblank an early frame stands for when emulated time has run ahead of
+// real time since (pace_at_pad_read).
+std::optional<std::uint64_t> &frame_vblank_override() {
+    static std::optional<std::uint64_t> vblank;
+    return vblank;
 }
 
 void present_frame(Runtime &rt) {
@@ -329,7 +365,8 @@ void present_frame(Runtime &rt) {
     renderer.set_fast_forward(fast_loading::active());
     // The real time the frame stands for, which frame interpolation spaces
     // its presents by: that of the vblank the game's frame started from.
-    const bool presented = renderer.present(address, kernel().real_time_of(frame_start_us(kernel().last_vblank_us())));
+    const bool presented = renderer.present(
+        address, kernel().real_time_of(frame_start_us(frame_vblank_override().value_or(kernel().last_vblank_us()))));
     // The frame's camera has been measured by now, so the hunt for the guest
     // variables behind it can compare RAM against it.
     probe::camera_frame(rt, media().ge.view_matrix_source());
@@ -406,6 +443,30 @@ void present_frame(Runtime &rt) {
     (void)rt;
     perf::end_frame(kernel().now_us());
 #endif
+}
+
+// Shows the target the display lists drew last, if the game has flipped to it
+// before and is not showing it now.
+void present_drawn_target(Runtime &rt) {
+    EarlyPresent &early = early_present();
+    if (!early.drawn) return;
+    const std::uint32_t target = media().ge.target().color_address;
+    const std::uint32_t offset = vram_offset(target);
+    const std::uint32_t showing = media().display.framebuffer;
+    if ((target & 0x1F000000u) != kEdramBase || offset == vram_offset(showing) ||
+        (offset != early.flipped[0] && offset != early.flipped[1]))
+        return;
+    early.drawn = false;
+    trace_pacing("present early", target);
+    media().display.framebuffer = target;
+    stall_watchdog::note_frame();
+    frame_vblank_override() = pace_at_pad_read() ? early.moment : std::nullopt;
+    present_frame(rt);
+    frame_vblank_override().reset();
+    media().display.framebuffer = showing;
+    early.shown = offset;
+    early.previous = vram_offset(showing);
+    early.skipped = 0;
 }
 
 // One sample of the pad, as the game reads it.
@@ -592,7 +653,10 @@ void register_display_ctrl(HleRegistrar &hle) {
             EarlyPresent &early = early_present();
             const std::uint32_t offset = vram_offset(arg(ctx, 0));
             if (offset != early.flipped[0]) early.flipped = {offset, early.flipped[0]};
-            if (offset == early.shown) {
+            // Sixteen in a row without an early present between: the game
+            // has stopped drawing this way, and its flips are its own again.
+            if (early.shown != EarlyPresent::kNone && (offset == early.shown || offset == early.previous) &&
+                ++early.skipped <= 16u) {
                 kernel().finish(ctx, 0u);
                 return;
             }
@@ -629,6 +693,17 @@ void register_display_ctrl(HleRegistrar &hle) {
     // waits for the next vblank, as the framework did before.
     hle.add("sceCtrl", "sceCtrlReadBufferPositive", [](Runtime &rt, AllegrexContext &ctx) {
         const std::uint32_t count = std::clamp<std::uint32_t>(arg(ctx, 1), 1u, 64u);
+        if (EarlyPresent &early = early_present(); pace_at_pad_read()) {
+            // Show what was drawn and wait for real time here; the pad is
+            // sampled below, when that has passed.
+            if (std::exchange(early.ahead, false)) {
+                present_drawn_target(rt);
+                kernel().hold_to_real_time();
+            }
+            early.moment = kernel().last_vblank_us();
+            early.ahead = true;
+            kernel().release_pacing();
+        }
         const std::uint32_t unread = take_ctrl_samples(count);
         trace_pacing("sceCtrlReadBufferPositive", unread);
         if (unread != 0u) {
@@ -800,21 +875,7 @@ void register_ge(HleRegistrar &hle) {
     hle.add("sceGe_user", "sceGeDrawSync", [](Runtime &rt, AllegrexContext &ctx) {
         trace_pacing("sceGeDrawSync", media().ge.target().color_address); // value: the target drawn last
         std::erase_if(media().ge_lists, [](const auto &item) { return item.second.done; });
-        if (EarlyPresent &early = early_present(); present_at_draw_sync() && early.drawn) {
-            const std::uint32_t target = media().ge.target().color_address;
-            const std::uint32_t offset = vram_offset(target);
-            const std::uint32_t showing = media().display.framebuffer;
-            if ((target & 0x1F000000u) == kEdramBase && offset != vram_offset(showing) &&
-                (offset == early.flipped[0] || offset == early.flipped[1])) {
-                early.drawn = false;
-                trace_pacing("present at draw sync", target);
-                media().display.framebuffer = target;
-                stall_watchdog::note_frame();
-                present_frame(rt);
-                media().display.framebuffer = showing;
-                early.shown = offset;
-            }
-        }
+        if (present_at_draw_sync()) present_drawn_target(rt);
         kernel().finish(ctx, 0u);
     });
     hle.add("sceGe_user", "sceGeBreak", [](Runtime &, AllegrexContext &ctx) { kernel().finish(ctx, 0u); });

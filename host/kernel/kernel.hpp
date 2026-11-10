@@ -247,6 +247,16 @@ public:
     // after the game was paused, so it resumes at normal speed rather than
     // racing to make up the pause.
     void resync_real_time() noexcept { pacing_started_ = false; }
+    // Released, emulated time runs ahead of real time without waiting for it;
+    // hold_to_real_time() ends that and waits here for real time to catch up
+    // (at most a tenth of a second). A release ends by itself once emulated
+    // time is 150 ms ahead. For a game whose frame is better waited out
+    // somewhere else than at its vblank waits (hle_media.cpp).
+    void release_pacing() noexcept { pacing_released_ = true; }
+    void hold_to_real_time() {
+        pacing_released_ = false;
+        pace_to_real_time();
+    }
     // Every thread, what it waits for and where, the objects waited on, the
     // clock and the pacing, one line each (kernel/stall_watchdog.hpp).
     void dump_state(std::ostream &out) const;
@@ -421,6 +431,7 @@ private:
     std::chrono::steady_clock::time_point busy_since_{};
     bool pacing_started_{};
     bool pacing_fast_{};  // the hold lets emulated time run ahead: a load runs fast
+    bool pacing_released_{};
     std::chrono::steady_clock::time_point pacing_real_base_{};
     std::uint64_t pacing_virtual_base_{};
     IdleHook idle_hook_;

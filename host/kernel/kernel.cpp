@@ -552,7 +552,8 @@ bool Kernel::pace_to_real_time() {
     constexpr std::int64_t kMinSleepUs = 1000;
     constexpr std::int64_t kMaxSleepUs = 100000;
     constexpr std::int64_t kMaxLagUs = 100000;
-    if (ahead_us >= kMinSleepUs) {
+    if (pacing_released_ && ahead_us > 150000) pacing_released_ = false;
+    if (ahead_us >= kMinSleepUs && !pacing_released_) {
         const Clock::time_point wake = now + std::chrono::microseconds(std::min(ahead_us, kMaxSleepUs));
         Clock::time_point sleep_start = now;
         if (idle_hook_) {
