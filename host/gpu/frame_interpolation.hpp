@@ -150,8 +150,9 @@ struct CutThresholds {
     // have as many of those, the same texture coordinates at every vertex
     // and no vertex further than `max_through_step` pixels (of the 480x272
     // screen) away; anything else is shown as the frame drew it, so a new
-    // glyph does not slide in from where another one was. With it a pair
-    // of frames with nothing in 3D (a menu) is blended too. Off
+    // glyph does not slide in from where another one was. A pair of frames
+    // with nothing in 3D stays unblended: a replay draws only the draw calls
+    // into the displayed framebuffer, and splash screens came out black. Off
     // (<prefix>_INTERPOLATION_NO_THROUGH turns it off where a game set it),
     // the interface is shown as each frame drew it.
     bool through{false};
