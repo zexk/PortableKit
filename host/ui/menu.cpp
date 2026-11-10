@@ -120,6 +120,7 @@ private:
     bool quit_{};
     bool was_editing_{};
     bool back_{};  // the back button was pressed this frame
+    bool game_screen_open_{};  // the port's own Game tab screen was open last frame
     Confirm confirm_{Confirm::None};
     bool confirm_opened_{};  // the confirmation was on screen last frame
     std::optional<input::Action> binding_;  // waiting for a key for this control
@@ -143,7 +144,7 @@ bool Menu::frame() {
     // Back closes the font list, or the save import and export, before it
     // closes the menu.
     const bool font_list_was_open = (tab_ == 0 && (font_list_open() || texture_pack_screen_open())) ||
-                                    (tab_ == 5 && save_screen_open());
+                                    (tab_ == 5 && save_screen_open()) || (tab_ == 3 && game_screen_open_);
     back_ = back || pad_back;
 
     begin_panel("##menu", portablekit::game().project_name, paused_ ? "Paused" : "Running", true);
@@ -476,6 +477,8 @@ void Menu::video() {
 
 // What changes how the game runs rather than how it looks or sounds.
 void Menu::gameplay() {
+    game_screen_open_ = portablekit::game().game_settings_screen && portablekit::game().game_settings_screen(back_);
+    if (game_screen_open_) return;
     settings::Settings &s = settings::current();
     section("Speed");
     if (choice_row("Game speed", s.unthrottled ? "Unlimited" : "Normal",

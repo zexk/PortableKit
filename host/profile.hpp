@@ -264,6 +264,9 @@ struct GameProfile {
     // when the player restores that page's defaults. The port owns persistence.
     void (*draw_game_settings)() = nullptr;
     void (*reset_game_settings)() = nullptr;
+    // Optional screen of the port's own, opened from one of those controls.
+    // Draws it and returns true while it is open; `back` is the back button.
+    bool (*game_settings_screen)(bool back) = nullptr;
 
     // --- The game's camera and view ----------------------------------------
     // Drives the game's own camera from what the player asks of it
