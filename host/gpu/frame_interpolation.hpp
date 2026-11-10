@@ -45,6 +45,9 @@ struct DrawSummary {
     // render-to-texture passes are shown as the frame drew them.
     bool eligible{};
     bool skinned{};  // the vertices were blended by bone matrices
+    // A through-mode draw (screen coordinates: the interface) that is not a
+    // clear. Blended by its vertices with CutThresholds::through.
+    bool through{};
     Matrix world{};
     Matrix view{};
     Matrix projection{};
@@ -140,6 +143,19 @@ struct CutThresholds {
     // transformed vertices (Purun) has nothing else to blend; off, only
     // perspective draws are, which keeps a 3D game's 2D interface as it is.
     bool orthographic{false};
+    // Blend through-mode draws too: the interface is drawn in screen
+    // coordinates, with no matrix to blend, so a sprite that moves is moved
+    // by its vertices. A draw call is paired with the one of the other
+    // frame that has the same state, texture and size, when both frames
+    // have as many of those, the same texture coordinates at every vertex
+    // and no vertex further than `max_through_step` pixels (of the 480x272
+    // screen) away; anything else is shown as the frame drew it, so a new
+    // glyph does not slide in from where another one was. With it a pair
+    // of frames with nothing in 3D (a menu) is blended too. Off
+    // (<prefix>_INTERPOLATION_NO_THROUGH turns it off where a game set it),
+    // the interface is shown as each frame drew it.
+    bool through{false};
+    float max_through_step{48.0f};
 };
 
 class Matcher {

@@ -26,6 +26,7 @@ DrawSummary summarize(const DrawCall &call) {
     // Vertex type bits 9..10 give the weight format; ge_state.cpp's
     // decode_vertices skins exactly the transformed vertices that have one.
     draw.skinned = ((call.vertex_type >> 9u) & 3u) != 0u && !call.through;
+    draw.through = call.through && !call.clear_mode;
     draw.world = call.world;
     draw.view = call.view;
     draw.projection = call.projection;
@@ -278,7 +279,9 @@ const Matching &Matcher::match(const std::vector<DrawSummary> &older, const std:
                                       thresholds.continuous_distance_margin,
                                   max_distance, std::max(max_distance, thresholds.max_continuous_distance));
     }
-    if (out.eligible_newer == 0u || out.matched == 0u) {
+    if (thresholds.through && out.eligible_newer == 0u && out.eligible_older == 0u) {
+        // Nothing in 3D in either frame: a menu, blended by its sprites alone.
+    } else if (out.eligible_newer == 0u || out.matched == 0u) {
         out.cut = "nothing to blend";
     } else if (static_cast<float>(out.matched) <
                thresholds.min_matched_fraction * static_cast<float>(std::min(out.eligible_newer, out.eligible_older))) {

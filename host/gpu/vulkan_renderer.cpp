@@ -1571,6 +1571,7 @@ struct VulkanRenderer::Impl {
         std::uint32_t plain_textures{}; // a texture the older frame drew with was dropped
         std::uint64_t groups{};  // draw calls recorded again
         std::uint64_t flipbook_steps{};  // texture offsets not blended: a flipbook's step
+        std::uint64_t through_moved{};   // through-mode draw calls moved by their vertices
         std::uint64_t followed{};        // draw calls without a partner moved with the camera only
         std::uint64_t brought{};         // draw calls only the newer frame has, carried back along the camera
         std::uint32_t rejected{};        // pairs given up: moved too far on their own
@@ -2168,6 +2169,7 @@ bool VulkanRenderer::initialize(const RendererConfig &config, std::string &error
     impl.trace_interpolation = portablekit::env("TRACE_INTERPOLATION") != nullptr;
     if (const interpolation::CutThresholds *thresholds = portablekit::game().interpolation_thresholds)
         impl.cut_thresholds = *thresholds;
+    if (portablekit::env("INTERPOLATION_NO_THROUGH") != nullptr) impl.cut_thresholds.through = false;
     pacing::set_game_frame_vblanks(static_cast<int>(portablekit::game().frame_vblanks));
     impl.present_clock = pacing::PresentClock{};
     impl.governor = pacing::RateGovernor{};
@@ -6649,7 +6651,11 @@ void VulkanRenderer::submit(const DrawCall &call, const GuestMemory &memory) {
     // to blend them with the next frame's; ge_state.cpp skins exactly the
     // transformed vertices whose type has weights.
     // A raw draw is blended through its bones instead (replay()).
-    const bool skinned = impl.interpolating && !raw && !call.through && ((call.vertex_type >> 9u) & 3u) != 0u;
+    // So does a through-mode draw with CutThresholds::through: its vertices
+    // are all there is to blend.
+    const bool skinned = impl.interpolating && !raw &&
+                         (call.through ? impl.cut_thresholds.through && !call.clear_mode
+                                       : ((call.vertex_type >> 9u) & 3u) != 0u);
     const std::uint32_t skinned_first =
         skinned ? static_cast<std::uint32_t>(impl.recording_frame.skinned.size()) : Impl::kNone;
     VkDeviceSize vertex_start = impl.vertex_offset;
@@ -7717,6 +7723,7 @@ void VulkanRenderer::Impl::replay(VkCommandBuffer commands, std::uint32_t slot, 
     std::uint32_t written_offset = 0u;
     std::uint64_t replayed = 0u;
     std::uint64_t flipbook_steps = 0u;
+    std::uint64_t through_moved = 0u;
     std::uint64_t followed = 0u;
     std::uint64_t brought = 0u;
     // <prefix>_INTERPOLATION_NO_FLIPBOOK_GUARD blends texture offsets up to
@@ -7826,6 +7833,48 @@ void VulkanRenderer::Impl::replay(VkCommandBuffer commands, std::uint32_t slot, 
             ++brought;
         }
     };
+
+    // Through-mode draw calls (CutThresholds::through) have no matrix: one
+    // is paired with the draw call of the other frame that has the same
+    // state and size, in drawing order, when both frames have as many of
+    // those. A count that differs (a glyph more, a marker gone) pairs none
+    // of them: which is which cannot be told.
+    std::vector<std::uint32_t> through_mate;
+    if (cut_thresholds.through && !ahead && t > 0.0f) {
+        const auto keyed = [](const FrameRecord &frame) {
+            std::vector<std::pair<std::uint64_t, std::uint32_t>> keys;
+            for (std::uint32_t i = 0; i < frame.groups.size(); ++i) {
+                const ReplayGroup &group = frame.groups[i];
+                if (group.target != frame.displayed || group.skinned == kNone ||
+                    !frame.summaries[group.first_draw].through)
+                    continue;
+                std::uint64_t hash = 1469598103934665603ull;
+                const auto mix = [&hash](std::uint64_t value) { hash = (hash ^ value) * 1099511628211ull; };
+                mix(reinterpret_cast<std::uintptr_t>(group.state.pipeline));
+                mix(reinterpret_cast<std::uintptr_t>(group.state.texture));
+                mix(reinterpret_cast<std::uintptr_t>(group.state.palette));
+                mix(group.count);
+                mix(group.vertex_count);
+                mix(frame.summaries[group.first_draw].texture_address);
+                keys.emplace_back(hash, i);
+            }
+            std::stable_sort(keys.begin(), keys.end(),
+                             [](const auto &a, const auto &b) { return a.first < b.first; });
+            return keys;
+        };
+        const auto from = keyed(older), to = keyed(newer);
+        through_mate.assign(older.groups.size(), kNone);
+        for (std::size_t a = 0u, b = 0u; a < from.size();) {
+            std::size_t a_end = a, b_end = b;
+            while (a_end < from.size() && from[a_end].first == from[a].first) ++a_end;
+            while (b < to.size() && to[b].first < from[a].first) ++b;
+            for (b_end = b; b_end < to.size() && to[b_end].first == from[a].first;) ++b_end;
+            if (a_end - a == b_end - b)
+                for (std::size_t i = 0u; i < a_end - a; ++i) through_mate[from[a + i].second] = to[b + i].second;
+            a = a_end;
+            b = b_end;
+        }
+    }
 
     replay_regions = 0u;
     for (const ReplayGroup &drawn : base.groups) {
@@ -8004,12 +8053,46 @@ void VulkanRenderer::Impl::replay(VkCommandBuffer commands, std::uint32_t slot, 
             }
         }
 
+        const auto index = static_cast<std::size_t>(&drawn - base.groups.data());
+        if (index < through_mate.size() && through_mate[index] != kNone) {
+            // The same sprites, moved: every vertex keeps its texture
+            // coordinates and stays within max_through_step. Only x and y
+            // are blended; w and the normal carry a sprite's texel bounds.
+            const ReplayGroup &next = newer.groups[through_mate[index]];
+            const GpuVertex *a = older.skinned.data() + drawn.skinned;
+            const GpuVertex *b = newer.skinned.data() + next.skinned;
+            const float limit = cut_thresholds.max_through_step;
+            bool same = same_state(drawn.state, next.state) && next.vertex_count == drawn.vertex_count &&
+                        drawn.skinned + drawn.vertex_count <= older.skinned.size() &&
+                        next.skinned + next.vertex_count <= newer.skinned.size();
+            bool moved = false;
+            for (std::uint32_t v = 0; same && v < drawn.vertex_count; ++v) {
+                same = a[v].u == b[v].u && a[v].v == b[v].v && std::fabs(b[v].x - a[v].x) <= limit &&
+                       std::fabs(b[v].y - a[v].y) <= limit;
+                moved = moved || a[v].x != b[v].x || a[v].y != b[v].y;
+            }
+            const VkDeviceSize at = (scratch_at + 15u) & ~VkDeviceSize{15u};
+            const VkDeviceSize bytes = static_cast<VkDeviceSize>(drawn.vertex_count) * sizeof(GpuVertex);
+            if (same && moved && at + bytes <= scratch_end) {
+                auto *out = reinterpret_cast<GpuVertex *>(mapped + at);
+                for (std::uint32_t v = 0; v < drawn.vertex_count; ++v) {
+                    GpuVertex blended = a[v];
+                    blended.x += (b[v].x - blended.x) * s;
+                    blended.y += (b[v].y - blended.y) * s;
+                    out[v] = blended;
+                }
+                scratch_at = at + bytes;
+                vertex_base = at;
+                ++through_moved;
+            }
+        }
         emit(drawn, state, vertex_base);
     }
     bring_newer(newer.groups.size());
     vkCmdEndRenderPass(commands);
     interpolation_stats.groups += replayed;
     interpolation_stats.flipbook_steps += flipbook_steps;
+    interpolation_stats.through_moved += through_moved;
     interpolation_stats.followed += followed;
     interpolation_stats.brought += brought;
 }
@@ -8061,11 +8144,13 @@ void VulkanRenderer::Impl::report_interpolation() {
                     plain > reasons_known ? plain - reasons_known : 0u, stats.blocked, stats.over_budget);
         std::printf("[interp] guards: %u pairs moved too far on their own (%u with the same mesh drawn more than "
                     "once), own motion kept up to %.1f units; %.0f draw calls a blend followed the camera only; "
-                    "%.0f brought back from the newer frame; %.0f texture offsets a blend held (flipbook steps)\n",
+                    "%.0f brought back from the newer frame; %.0f texture offsets a blend held (flipbook steps); "
+                    "%.1f through-mode draw calls a blend moved\n",
                     stats.rejected, stats.rejected_shared, static_cast<double>(stats.max_own_motion),
                     stats.blended != 0u ? static_cast<double>(stats.followed) / stats.blended : 0.0,
                     stats.blended != 0u ? static_cast<double>(stats.brought) / stats.blended : 0.0,
-                    stats.blended != 0u ? static_cast<double>(stats.flipbook_steps) / stats.blended : 0.0);
+                    stats.blended != 0u ? static_cast<double>(stats.flipbook_steps) / stats.blended : 0.0,
+                    stats.blended != 0u ? static_cast<double>(stats.through_moved) / stats.blended : 0.0);
         std::fflush(stdout);
     }
     const perf::Summary &summary = perf::last_second();
