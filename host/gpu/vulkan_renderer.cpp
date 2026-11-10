@@ -8062,7 +8062,14 @@ void VulkanRenderer::Impl::replay(VkCommandBuffer commands, std::uint32_t slot, 
             const GpuVertex *a = older.skinned.data() + drawn.skinned;
             const GpuVertex *b = newer.skinned.data() + next.skinned;
             const float limit = cut_thresholds.max_through_step;
-            bool same = same_state(drawn.state, next.state) && next.vertex_count == drawn.vertex_count &&
+            // Not same_state(): the lighting block offsets lie in each frame's
+            // own region of the buffer, and a through-mode draw uses none.
+            const DrawState &sa = drawn.state, &sb = next.state;
+            const bool alike = sa.pipeline == sb.pipeline && sa.texture == sb.texture && sa.palette == sb.palette &&
+                               std::memcmp(&sa.viewport, &sb.viewport, sizeof(VkViewport)) == 0 &&
+                               std::memcmp(&sa.scissor, &sb.scissor, sizeof(VkRect2D)) == 0 && sa.blend == sb.blend &&
+                               std::memcmp(&sa.push, &sb.push, sizeof(PushConstants)) == 0;
+            bool same = alike && next.vertex_count == drawn.vertex_count &&
                         drawn.skinned + drawn.vertex_count <= older.skinned.size() &&
                         next.skinned + next.vertex_count <= newer.skinned.size();
             bool moved = false;
