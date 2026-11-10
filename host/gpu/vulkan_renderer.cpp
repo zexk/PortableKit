@@ -8056,8 +8056,8 @@ void VulkanRenderer::Impl::replay(VkCommandBuffer commands, std::uint32_t slot, 
         const auto index = static_cast<std::size_t>(&drawn - base.groups.data());
         if (index < through_mate.size() && through_mate[index] != kNone) {
             // The same sprites, moved: every vertex keeps its texture
-            // coordinates and stays within max_through_step. Only x and y
-            // are blended; w and the normal carry a sprite's texel bounds.
+            // coordinates and stays within max_through_step. Only x, y and the
+            // colour are blended; w and the normal carry a sprite's texel bounds.
             const ReplayGroup &next = newer.groups[through_mate[index]];
             const GpuVertex *a = older.skinned.data() + drawn.skinned;
             const GpuVertex *b = newer.skinned.data() + next.skinned;
@@ -8076,7 +8076,7 @@ void VulkanRenderer::Impl::replay(VkCommandBuffer commands, std::uint32_t slot, 
             for (std::uint32_t v = 0; same && v < drawn.vertex_count; ++v) {
                 same = a[v].u == b[v].u && a[v].v == b[v].v && std::fabs(b[v].x - a[v].x) <= limit &&
                        std::fabs(b[v].y - a[v].y) <= limit;
-                moved = moved || a[v].x != b[v].x || a[v].y != b[v].y;
+                moved = moved || a[v].x != b[v].x || a[v].y != b[v].y || a[v].color != b[v].color;
             }
             const VkDeviceSize at = (scratch_at + 15u) & ~VkDeviceSize{15u};
             const VkDeviceSize bytes = static_cast<VkDeviceSize>(drawn.vertex_count) * sizeof(GpuVertex);
@@ -8086,6 +8086,16 @@ void VulkanRenderer::Impl::replay(VkCommandBuffer commands, std::uint32_t slot, 
                     GpuVertex blended = a[v];
                     blended.x += (b[v].x - blended.x) * s;
                     blended.y += (b[v].y - blended.y) * s;
+                    // A fade is the vertex colour's alpha stepping each frame.
+                    if (a[v].color != b[v].color) {
+                        std::uint32_t color = 0u;
+                        for (std::uint32_t shift = 0u; shift < 32u; shift += 8u) {
+                            const float from = static_cast<float>((a[v].color >> shift) & 0xFFu);
+                            const float to = static_cast<float>((b[v].color >> shift) & 0xFFu);
+                            color |= static_cast<std::uint32_t>(std::lround(from + (to - from) * s)) << shift;
+                        }
+                        blended.color = color;
+                    }
                     out[v] = blended;
                 }
                 scratch_at = at + bytes;
