@@ -411,6 +411,15 @@ void Menu::video() {
             settings::save();
         }
     }
+    if (toggle_row("Show frames early", s.present_at_draw_sync,
+                   options_for("video.present_at_draw_sync",
+                               "Shows each frame as soon as the game has drawn it instead of when the game "
+                               "switches to it, which many games do a whole frame of their own later. Makes "
+                               "the game quicker to react. Turn it off if the picture flickers or shows "
+                               "unfinished frames."))) {
+        s.present_at_draw_sync = !s.present_at_draw_sync;
+        settings::save();
+    }
     {
         RowOptions o = options_for("video.frame_rate_auto",
                                    "On lowers the frame rate by itself when presenting that often would slow the "
@@ -476,6 +485,7 @@ void Menu::video() {
         restore("video.frame_rate", s.frame_rate, d.frame_rate);
         restore("video.frame_rate_auto", s.frame_rate_auto, d.frame_rate_auto);
         restore("video.interpolation_lead", s.interpolation_lead_percent, d.interpolation_lead_percent);
+        restore("video.present_at_draw_sync", s.present_at_draw_sync, d.present_at_draw_sync);
         restore("video.unthrottled", s.unthrottled, d.unthrottled);
         restore("video.fast_loading", s.fast_loading, d.fast_loading);
         restore("video.performance", s.perf, d.perf);

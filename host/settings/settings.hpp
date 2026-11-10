@@ -64,6 +64,9 @@ struct Settings {
     // Of the delay frame interpolation adds, the percent presents skip by
     // carrying the newest frame's motion on (pacing::PresentClock::set_lead).
     std::uint32_t interpolation_lead_percent{0u};
+    // Show a frame when the game has finished drawing it, not when the game
+    // flips to it a frame of its own later (hle_media.cpp, EarlyPresent).
+    bool present_at_draw_sync{};
     PerfDisplay perf{PerfDisplay::Off};
 
     // Text

@@ -166,7 +166,7 @@ void block_transfer(Runtime &rt, const gpu::BlockTransfer &transfer) {
 #endif
 }
 
-// <prefix>_PRESENT_AT_DRAW_SYNC=1 shows a frame when the game has finished
+// video.present_at_draw_sync (Video > Show frames early) shows a frame when the game has finished
 // drawing it rather than when the game flips to it. A game that draws its
 // back buffer at the start of a frame and flips to it at the start of the
 // next holds every finished picture back a whole frame of its own; here the
@@ -186,10 +186,7 @@ EarlyPresent &early_present() {
     return state;
 }
 
-bool present_at_draw_sync() {
-    static const bool value = portablekit::env("PRESENT_AT_DRAW_SYNC") != nullptr;
-    return value;
-}
+bool present_at_draw_sync() { return settings::current().present_at_draw_sync; }
 
 constexpr std::uint32_t vram_offset(std::uint32_t address) { return address & (kEdramSize - 1u); }
 
