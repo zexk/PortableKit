@@ -3,10 +3,15 @@
 #include "app_paths.hpp"
 #include "install/user_data.hpp"
 #include "settings/settings.hpp"
+#include "perf/frame_stats.hpp"
+#include "perf/perf_overlay.hpp"
 
+#include <algorithm>
+#include <array>
 #include <cstdlib>
 #include <filesystem>
 #include <iostream>
+#include <string_view>
 
 namespace {
 using namespace portablekit::settings;
@@ -70,6 +75,28 @@ void test_portable_folder() {
 }
 
 int main(int argc, char **argv) {
+    if (argc == 2 && std::string_view(argv[1]) == "fps") {
+        using namespace portablekit;
+        check(current().perf == PerfDisplay::Fps, "FPS override selects the counter");
+        check(perf::options().overlay && !perf::options().log, "FPS counter enables only the overlay");
+        check(perf::overlay_width() == 64 && perf::overlay_height() == 11, "FPS counter is one small line");
+        std::array<std::uint32_t, perf::kOverlayWidth * perf::kOverlayHeight + 2> pixels;
+        pixels.fill(0x12345678);
+        perf::draw_overlay(pixels.data() + 1);
+        check(pixels.front() == 0x12345678 && pixels.back() == 0x12345678, "Overlay stays inside its buffer");
+        const auto lower = pixels.begin() + 1 + perf::overlay_height() * perf::kOverlayWidth;
+        check(*lower == 0, "FPS background is transparent");
+        check(std::all_of(lower, pixels.end() - 1, [&](auto pixel) { return pixel == *lower; }),
+              "FPS-only mode draws no graph or detail rows");
+        check(std::any_of(pixels.begin() + 1, lower, [&](auto pixel) { return pixel != *lower; }),
+              "FPS text is visible before the first measured second");
+        current().perf = PerfDisplay::Overlay;
+        perf::draw_overlay(pixels.data() + 1);
+        check((pixels[1] >> 24u) == 255u, "Detailed overlay keeps its background");
+        check(perf::overlay_width() == perf::kOverlayWidth && perf::overlay_height() == perf::kOverlayHeight,
+              "Detailed overlay retains its original size");
+        return failures ? 1 : 0;
+    }
     // Check an environment override through the real settings parser.
     if (argc == 2) {
         check(current().fov_percent == static_cast<unsigned>(std::strtoul(argv[1], nullptr, 10)),

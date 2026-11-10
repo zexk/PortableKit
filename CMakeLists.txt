@@ -342,6 +342,8 @@ endif()
 if(PSPRECOMP_BUILD_TESTS)
     add_executable(portablekit_settings_tests
         "${PORTABLEKIT_ROOT}/tests/settings_defaults_tests.cpp"
+        "${PORTABLEKIT_ROOT}/host/perf/frame_stats.cpp"
+        "${PORTABLEKIT_ROOT}/host/perf/perf_overlay.cpp"
         "${PORTABLEKIT_ROOT}/tests/test_profile.cpp"
         "${PORTABLEKIT_ROOT}/host/profile.cpp"
         "${PORTABLEKIT_ROOT}/host/settings/settings.cpp"
@@ -352,6 +354,8 @@ if(PSPRECOMP_BUILD_TESTS)
     target_link_libraries(portablekit_settings_tests PRIVATE psprecomp_core)
     set_target_properties(portablekit_settings_tests PROPERTIES RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin")
     add_test(NAME portablekit_settings_tests COMMAND portablekit_settings_tests)
+    add_test(NAME portablekit_fps_override_test COMMAND ${CMAKE_COMMAND} -E env
+        PORTABLEKIT_PERF=fps $<TARGET_FILE:portablekit_settings_tests> fps)
     add_test(NAME portablekit_fov_override_test COMMAND ${CMAKE_COMMAND} -E env
         PORTABLEKIT_FOV=125 $<TARGET_FILE:portablekit_settings_tests> 125)
     add_test(NAME portablekit_fov_limit_test COMMAND ${CMAKE_COMMAND} -E env

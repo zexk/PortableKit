@@ -108,7 +108,8 @@ const Names<Aspect> kAspects{{{Aspect::Original, "original"}, {Aspect::Stretch, 
 const Names<PerfDisplay> kPerfDisplays{{{PerfDisplay::Off, "off"},
                                         {PerfDisplay::Overlay, "overlay"},
                                         {PerfDisplay::OverlayAndLog, "overlay+log"},
-                                        {PerfDisplay::Log, "log"}}};
+                                        {PerfDisplay::Log, "log"},
+                                        {PerfDisplay::Fps, "fps"}}};
 const Names<input::tilt::Mode> kTiltModes{{{input::tilt::Mode::Angle, "angle"},
                                             {input::tilt::Mode::AngleLevel, "level"},
                                             {input::tilt::Mode::AngleLevel, "horizon"},
@@ -251,7 +252,8 @@ const std::vector<Field> &fields() {
          [](const Settings &s) { return kPerfDisplays.format(s.perf); },
          [](Settings &s, const char *t) {
              // `1` has always meant the overlay and the log, `log` the log only.
-             if (std::strcmp(t, "log") == 0) s.perf = PerfDisplay::Log;
+             if (std::strcmp(t, "fps") == 0) s.perf = PerfDisplay::Fps;
+             else if (std::strcmp(t, "log") == 0) s.perf = PerfDisplay::Log;
              else s.perf = *t != '\0' && variable_flag(t) ? PerfDisplay::OverlayAndLog : PerfDisplay::Off;
          }},
         {"text.font", "FONT",

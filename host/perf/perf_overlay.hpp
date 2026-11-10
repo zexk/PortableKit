@@ -9,8 +9,13 @@ namespace portablekit::perf {
 inline constexpr std::uint32_t kOverlayWidth = 196u;
 inline constexpr std::uint32_t kOverlayHeight = 72u;
 
+// Visible portion of the backing image: FPS-only mode uses a single line.
+[[nodiscard]] std::uint32_t overlay_width();
+[[nodiscard]] std::uint32_t overlay_height();
+
 // Fills `pixels` (kOverlayWidth x kOverlayHeight, red in the low byte) with the
-// last second's numbers and a graph of recent frame times.
+// last second's numbers and graph, or just FPS. The renderer crops to the
+// visible width and height above.
 void draw_overlay(std::uint32_t *pixels);
 
 // Integer scale for an overlay drawn over an image `height` pixels tall, so it

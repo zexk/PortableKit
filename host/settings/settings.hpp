@@ -29,7 +29,7 @@ enum class PresentMode { Fifo, Mailbox, Immediate };
 // game the window's shape: its view widens or narrows to match (the vertical
 // field of view stays), and all 2D layers scale together to fill the window.
 enum class Aspect { Original, Stretch, Fill };
-enum class PerfDisplay { Off, Overlay, OverlayAndLog, Log };
+enum class PerfDisplay { Off, Overlay, OverlayAndLog, Log, Fps };
 enum class RightStick { Camera, DPad, Off };
 // The gamepad button that presses a tilting game's both tilt buttons at once
 // (LocoRoco's jump), instead of what it presses otherwise.

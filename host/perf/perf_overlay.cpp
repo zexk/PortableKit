@@ -1,6 +1,7 @@
 #include "perf_overlay.hpp"
 
 #include "frame_stats.hpp"
+#include "settings/settings.hpp"
 
 #include <algorithm>
 #include <cstdio>
@@ -107,12 +108,22 @@ std::uint32_t graph_row(float ms) {
 
 std::uint32_t overlay_scale(std::uint32_t height) { return std::max(1u, height / 360u); }
 
+std::uint32_t overlay_width() { return settings::current().perf == settings::PerfDisplay::Fps ? 64u : kOverlayWidth; }
+std::uint32_t overlay_height() { return settings::current().perf == settings::PerfDisplay::Fps ? 11u : kOverlayHeight; }
+
 void draw_overlay(std::uint32_t *pixels) {
-    std::fill(pixels, pixels + kOverlayWidth * kOverlayHeight, kBackground);
+    const bool fps_only = settings::current().perf == settings::PerfDisplay::Fps;
+    std::fill(pixels, pixels + kOverlayWidth * kOverlayHeight, fps_only ? 0u : kBackground);
 
     const Summary &s = last_second();
     char line[48];
     std::uint32_t y = kMargin;
+    if (fps_only) {
+        if (s.valid) std::snprintf(line, sizeof(line), "%.0f FPS", s.fps);
+        else std::snprintf(line, sizeof(line), "-- FPS");
+        draw_text(pixels, kMargin, y, line);
+        return;
+    }
     if (s.valid) {
         std::snprintf(line, sizeof(line), "FPS %.1f GAME %.1f SPD %.0f%%", s.fps, s.game_fps, s.speed * 100.0);
         draw_text(pixels, kMargin, y, line);

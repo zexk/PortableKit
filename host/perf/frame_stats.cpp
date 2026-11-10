@@ -233,6 +233,7 @@ Options options() {
     switch (settings::current().perf) {
     case settings::PerfDisplay::Off: break;
     case settings::PerfDisplay::Overlay: result.overlay = true; break;
+    case settings::PerfDisplay::Fps: result.overlay = true; break;
     case settings::PerfDisplay::OverlayAndLog: result.overlay = result.log = true; break;
     case settings::PerfDisplay::Log: result.log = true; break;
     }

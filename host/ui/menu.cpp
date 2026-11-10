@@ -426,13 +426,14 @@ void Menu::video() {
         }
     }
     {
-        static const char *const kPerf[] = {"Off", "Overlay", "Overlay and log", "Log only"};
+        static const char *const kPerf[] = {"Off", "Overlay", "Overlay and log", "Log only", "FPS only"};
         const int current = static_cast<int>(s.perf);
         if (const int delta = choice_row(
                 "Performance", kPerf[current],
-                options_for("video.performance", "Frame times and speed in the top-left corner, and a [perf] line "
+                options_for("video.performance", "FPS only shows a small counter. Overlay shows frame times and speed "
+                                                 "in the top-left corner, and log adds a [perf] line "
                                                  "per second on the console. F3 shows or hides the overlay."))) {
-            s.perf = static_cast<settings::PerfDisplay>(cycle(current, delta, 4));
+            s.perf = static_cast<settings::PerfDisplay>(cycle(current, delta, 5));
             renderer().set_perf_overlay(perf::options().overlay);
             settings::save();
         }

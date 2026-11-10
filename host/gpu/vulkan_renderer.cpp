@@ -2826,8 +2826,8 @@ bool VulkanRenderer::Impl::create_overlay(std::string &error) {
 void VulkanRenderer::Impl::record_overlay(VkCommandBuffer commands, VkImage destination) {
     const std::uint32_t scale = perf::overlay_scale(content_rect.extent.height);
     const std::uint32_t inset = 4u * scale;
-    const std::uint32_t width = perf::kOverlayWidth * scale;
-    const std::uint32_t height = perf::kOverlayHeight * scale;
+    const std::uint32_t width = perf::overlay_width() * scale;
+    const std::uint32_t height = perf::overlay_height() * scale;
     if (inset + width > content_rect.extent.width || inset + height > content_rect.extent.height) return;
 
     perf::draw_overlay(overlay_pixels.data());
@@ -2848,13 +2848,38 @@ void VulkanRenderer::Impl::record_overlay(VkCommandBuffer commands, VkImage dest
                VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL);
     VkImageBlit blit{};
     blit.srcSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0u, 0u, 1u};
-    blit.srcOffsets[1] = {static_cast<std::int32_t>(perf::kOverlayWidth),
-                          static_cast<std::int32_t>(perf::kOverlayHeight), 1};
+    blit.srcOffsets[1] = {static_cast<std::int32_t>(perf::overlay_width()),
+                          static_cast<std::int32_t>(perf::overlay_height()), 1};
     blit.dstSubresource = blit.srcSubresource;
     const std::int32_t left = content_rect.offset.x + static_cast<std::int32_t>(inset);
     const std::int32_t top = content_rect.offset.y + static_cast<std::int32_t>(inset);
     blit.dstOffsets[0] = {left, top, 0};
     blit.dstOffsets[1] = {left + static_cast<std::int32_t>(width), top + static_cast<std::int32_t>(height), 1};
+    if (settings::current().perf == settings::PerfDisplay::Fps) {
+        // Blits copy alpha rather than blend it. Copy only opaque glyph runs
+        // so transparent pixels leave the game image untouched.
+        std::vector<VkImageBlit> runs;
+        for (std::uint32_t y = 0; y < height / scale; ++y) {
+            for (std::uint32_t x = 0; x < width / scale;) {
+                if ((overlay_pixels[y * perf::kOverlayWidth + x] >> 24u) == 0u) { ++x; continue; }
+                const auto start = x++;
+                while (x < width / scale && (overlay_pixels[y * perf::kOverlayWidth + x] >> 24u) != 0u) ++x;
+                VkImageBlit run = blit;
+                run.srcOffsets[0] = {static_cast<std::int32_t>(start), static_cast<std::int32_t>(y), 0};
+                run.srcOffsets[1] = {static_cast<std::int32_t>(x), static_cast<std::int32_t>(y + 1u), 1};
+                run.dstOffsets[0] = {left + static_cast<std::int32_t>(start * scale),
+                                     top + static_cast<std::int32_t>(y * scale), 0};
+                run.dstOffsets[1] = {left + static_cast<std::int32_t>(x * scale),
+                                     top + static_cast<std::int32_t>((y + 1u) * scale), 1};
+                runs.push_back(run);
+            }
+        }
+        if (!runs.empty())
+            vkCmdBlitImage(commands, overlay_image, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, destination,
+                          VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, static_cast<std::uint32_t>(runs.size()),
+                          runs.data(), VK_FILTER_NEAREST);
+        return;
+    }
     vkCmdBlitImage(commands, overlay_image, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, destination,
                    VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1u, &blit, VK_FILTER_NEAREST);
 }
@@ -8642,12 +8667,12 @@ bool VulkanRenderer::capture_frame(const std::string &path) {
     if (impl.overlay_visible) {
         const std::uint32_t scale = perf::overlay_scale(height);
         const std::uint32_t inset = 4u * scale;
-        if (inset + perf::kOverlayWidth * scale <= width && inset + perf::kOverlayHeight * scale <= height) {
-            for (std::uint32_t y = 0; y < perf::kOverlayHeight * scale; ++y) {
+        if (inset + perf::overlay_width() * scale <= width && inset + perf::overlay_height() * scale <= height) {
+            for (std::uint32_t y = 0; y < perf::overlay_height() * scale; ++y) {
                 std::uint8_t *row = pixels.data() + static_cast<std::size_t>(inset + y) * width * 4u;
-                for (std::uint32_t x = 0; x < perf::kOverlayWidth * scale; ++x) {
+                for (std::uint32_t x = 0; x < perf::overlay_width() * scale; ++x) {
                     const std::uint32_t pixel = impl.overlay_pixels[(y / scale) * perf::kOverlayWidth + x / scale];
-                    std::memcpy(row + (inset + x) * 4u, &pixel, 4u);
+                    if ((pixel >> 24u) != 0u) std::memcpy(row + (inset + x) * 4u, &pixel, 4u);
                 }
             }
         }
