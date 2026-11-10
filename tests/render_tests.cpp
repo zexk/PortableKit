@@ -3,6 +3,7 @@
 // vertex the expansion would have written there.
 
 #include "gpu/triangle_indices.hpp"
+#include "gpu/texture_decode.hpp"
 
 #include <cstdint>
 #include <iostream>
@@ -108,12 +109,45 @@ void test_other_primitives() {
     }
 }
 
+void test_framebuffer_palettes() {
+    using portablekit::gpu::TextureFormat;
+    using portablekit::gpu::TextureState;
+    using portablekit::gpu::framebuffer_texture_flags;
+    TextureState texture{};
+    texture.format = TextureFormat::Clut16;
+    texture.clut_shift = 5u;
+    texture.clut_mask = 31u;
+    expect(framebuffer_texture_flags(texture, 0u) == (9u | 5u << 6u | 31u << 11u),
+           "16-bit framebuffer indices retain the CLUT's channel selection");
+    expect(framebuffer_texture_flags(texture, 3u) == 0u, "16-bit indices cannot read a 32-bit target");
+    texture.format = TextureFormat::Clut32;
+    expect(framebuffer_texture_flags(texture, 0u) == 0u, "32-bit indices cannot read a 16-bit target");
+    texture.clut_shift = 31u;
+    texture.clut_mask = 255u;
+    texture.clut_offset = 31u;
+    const auto flags = framebuffer_texture_flags(texture, 3u);
+    expect(static_cast<std::uint32_t>(static_cast<float>(flags)) == flags,
+           "all palette flags survive the float push constant exactly");
+    expect(((flags >> 4u) & 3u) == 3u && ((flags >> 6u) & 31u) == 31u &&
+           ((flags >> 11u) & 255u) == 255u && ((flags >> 19u) & 31u) == 31u,
+           "the shader can recover source format, shift, mask and palette bank");
+    texture.swizzled = true;
+    expect(framebuffer_texture_flags(texture, 3u) == 0u, "swizzled views still use the texture decoder");
+    texture.swizzled = false;
+    texture.format = TextureFormat::Clut8;
+    expect(framebuffer_texture_flags(texture, 0u) == 0u, "byte-wide views do not masquerade as pixels");
+    texture.format = TextureFormat::Rgba5551;
+    expect(framebuffer_texture_flags(texture, 0u) == 1u && framebuffer_texture_flags(texture, 3u) == 0u,
+           "direct-colour framebuffer matching keeps its existing pixel-size rule");
+}
+
 } // namespace
 
 int main() {
     test_matches_expansion();
     test_large_mesh();
     test_other_primitives();
+    test_framebuffer_palettes();
     std::cout << (failures ? "FAIL" : "PASS") << ": render helpers (" << failures << " failures)\n";
     return failures ? 1 : 0;
 }

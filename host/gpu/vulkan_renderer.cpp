@@ -1412,6 +1412,7 @@ struct VulkanRenderer::Impl {
     struct DrawState {
         VkPipeline pipeline{};
         VkDescriptorSet texture{};
+        VkDescriptorSet palette{};
         std::array<std::uint32_t, 3> lighting{};  // environment, object, raw block
         VkViewport viewport{};
         VkRect2D scissor{};
@@ -1464,6 +1465,9 @@ struct VulkanRenderer::Impl {
         if (!state_known || state.texture != recorded.texture)
             vkCmdBindDescriptorSets(command_buffer, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline_layout, 0u, 1u,
                                     &state.texture, 0u, nullptr);
+        if (!state_known || state.palette != recorded.palette)
+            vkCmdBindDescriptorSets(command_buffer, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline_layout, 2u, 1u,
+                                    &state.palette, 0u, nullptr);
         if (!lighting_bound || state.lighting != bound_lighting_offsets) {
             vkCmdBindDescriptorSets(command_buffer, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline_layout, 1u, 1u,
                                     &lighting_descriptor, static_cast<std::uint32_t>(state.lighting.size()),
@@ -1478,7 +1482,7 @@ struct VulkanRenderer::Impl {
         state_known = true;
     }
     [[nodiscard]] static bool same_state(const DrawState &a, const DrawState &b) {
-        return a.pipeline == b.pipeline && a.texture == b.texture && a.lighting == b.lighting &&
+        return a.pipeline == b.pipeline && a.texture == b.texture && a.palette == b.palette && a.lighting == b.lighting &&
                std::memcmp(&a.viewport, &b.viewport, sizeof(VkViewport)) == 0 &&
                std::memcmp(&a.scissor, &b.scissor, sizeof(VkRect2D)) == 0 && a.blend == b.blend &&
                std::memcmp(&a.push, &b.push, sizeof(PushConstants)) == 0;
@@ -2523,7 +2527,8 @@ bool VulkanRenderer::initialize(const RendererConfig &config, std::string &error
     VkPushConstantRange push_range{VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, 0u,
                                    sizeof(PushConstants)};
     VkPipelineLayoutCreateInfo pipeline_layout_info{VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO};
-    const std::array<VkDescriptorSetLayout, 2> set_layouts{impl.descriptor_layout, impl.lighting_layout};
+    const std::array<VkDescriptorSetLayout, 3> set_layouts{
+        impl.descriptor_layout, impl.lighting_layout, impl.descriptor_layout};
     pipeline_layout_info.setLayoutCount = static_cast<std::uint32_t>(set_layouts.size());
     pipeline_layout_info.pSetLayouts = set_layouts.data();
     pipeline_layout_info.pushConstantRangeCount = 1u;
@@ -4836,22 +4841,22 @@ void VulkanRenderer::Impl::snapshot_guest_words(const GuestMemory &memory, std::
 }
 
 // The render target a texture lies in, if the texture reads it the way it was
-// drawn: the same row length, a direct colour format of the same pixel size,
+// drawn: the same row length and pixel size, a direct or indexed colour view,
 // and guest memory under the texture unchanged since the target was last drawn
-// to. Anything else (a palette or swizzled view of a framebuffer, or a texture
+// to. Anything else (a swizzled view of a framebuffer, or a texture
 // the game has since put where a framebuffer was) is decoded from guest memory.
 VulkanRenderer::Impl::FramebufferTexture VulkanRenderer::Impl::find_framebuffer_texture(
     const GuestMemory &memory, const TextureState &texture) {
-    if (texture.swizzled || static_cast<std::uint32_t>(texture.format) > 3u || texture.width == 0u ||
-        texture.height == 0u)
-        return {};
+    if (texture.width == 0u || texture.height == 0u) return {};
     const std::uint32_t texture_address = GuestMemory::canonical(texture.address);
     Target *best = nullptr;
     std::uint32_t best_base = 0u;
     for (auto &[address, target] : targets) {
         if (!target.initialized || target.guest_words.empty()) continue;
         const std::uint32_t bytes_per_pixel = framebuffer_bytes_per_pixel(target.format);
-        if (texture_bits_per_pixel(texture.format) != bytes_per_pixel * 8u) continue;
+        static const bool no_palette = portablekit::env("NO_FB_PALETTES") != nullptr;
+        if (no_palette && static_cast<std::uint32_t>(texture.format) > 3u) continue;
+        if (framebuffer_texture_flags(texture, target.format) == 0u) continue;
         const std::uint32_t base = GuestMemory::canonical(address);
         const std::uint32_t bytes = target.stride * kPspHeight * bytes_per_pixel;
         if (texture_address < base || texture_address - base >= bytes) continue;
@@ -6799,6 +6804,7 @@ void VulkanRenderer::submit(const DrawCall &call, const GuestMemory &memory) {
     if (trace_fb && call.texture.enabled && !call.clear_mode) impl.trace_framebuffer_texture(call);
 
     VkDescriptorSet texture_descriptor = impl.white_texture.descriptor;
+    VkDescriptorSet palette_descriptor = impl.white_texture.descriptor;
     if (call.texture.enabled && !call.clear_mode) {
         const Impl::FramebufferTexture &source = framebuffer_source;
         const VkDescriptorSet copy =
@@ -6812,7 +6818,21 @@ void VulkanRenderer::submit(const DrawCall &call, const GuestMemory &memory) {
             texture_descriptor = copy;
             // The copy's sampler clamps at the target's edges; the shader's
             // clamp would take the whole target for the texture.
-            push.texture_params[0] = 1.0f;
+            const std::uint32_t flags = framebuffer_texture_flags(call.texture, source.target->format);
+            push.texture_params[0] = static_cast<float>(flags);
+            if ((flags & 8u) != 0u) {
+                // Reuse the texture cache for the palette; its texels stay on
+                // the GPU beside the framebuffer, including interpolated replays.
+                DrawCall palette_call{};
+                TextureState &palette = palette_call.texture;
+                palette.address = call.texture.clut_address;
+                palette.format = static_cast<TextureFormat>(call.texture.clut_format);
+                palette.width = palette.buffer_width = 512u;
+                palette.height = 1u;
+                palette.enabled = true;
+                palette_descriptor = impl.texture_for(memory, palette_call).descriptor;
+                if ((call.texture.mag_filter & 1u) != 0u) push.texture_params[1] += 256.0f;
+            }
             const float width = static_cast<float>(call.texture.width);
             const float height = static_cast<float>(call.texture.height);
             const std::array<float, 4> uv = push.uv_transform;
@@ -6924,7 +6944,7 @@ void VulkanRenderer::submit(const DrawCall &call, const GuestMemory &memory) {
     vk_scissor.extent = {static_cast<std::uint32_t>(right - left), static_cast<std::uint32_t>(bottom - top)};
     const std::array<std::uint32_t, 3> lighting_offsets{impl.environment_offset, impl.object_offset, impl.raw_offset};
     if (merge) {
-        const Impl::DrawState state{pipeline, texture_descriptor, lighting_offsets, vk_viewport, vk_scissor,
+        const Impl::DrawState state{pipeline, texture_descriptor, palette_descriptor, lighting_offsets, vk_viewport, vk_scissor,
                                     blend_constants, push};
         if (!direct) {
             impl.flush_group();
@@ -6992,6 +7012,8 @@ void VulkanRenderer::submit(const DrawCall &call, const GuestMemory &memory) {
     }
     vkCmdBindDescriptorSets(impl.command_buffer, VK_PIPELINE_BIND_POINT_GRAPHICS, impl.pipeline_layout, 0u, 1u,
                             &texture_descriptor, 0u, nullptr);
+    vkCmdBindDescriptorSets(impl.command_buffer, VK_PIPELINE_BIND_POINT_GRAPHICS, impl.pipeline_layout, 2u, 1u,
+                            &palette_descriptor, 0u, nullptr);
     // Every pipeline shares one layout, so set 1 stays bound across pipeline
     // and texture changes; it is bound again only when a block moved.
     if (!impl.lighting_bound || lighting_offsets != impl.bound_lighting_offsets) {
@@ -7011,7 +7033,7 @@ void VulkanRenderer::submit(const DrawCall &call, const GuestMemory &memory) {
         vkCmdDraw(impl.command_buffer, draw_count, 1u, 0u, 0u);
     }
     if (impl.interpolating) {
-        const Impl::DrawState state{pipeline, texture_descriptor, lighting_offsets, vk_viewport, vk_scissor,
+        const Impl::DrawState state{pipeline, texture_descriptor, palette_descriptor, lighting_offsets, vk_viewport, vk_scissor,
                                     blend_constants, push};
         impl.record_draw_for_replay(call, lit, skinned_first, state, vertex_start,
                                     direct ? impl.vertex_buffer : VK_NULL_HANDLE, index_start, draw_count,
@@ -7719,6 +7741,9 @@ void VulkanRenderer::Impl::replay(VkCommandBuffer commands, std::uint32_t slot, 
         if (!known || state.texture != set.texture)
             vkCmdBindDescriptorSets(commands, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline_layout, 0u, 1u,
                                     &state.texture, 0u, nullptr);
+        if (!known || state.palette != set.palette)
+            vkCmdBindDescriptorSets(commands, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline_layout, 2u, 1u,
+                                    &state.palette, 0u, nullptr);
         if (!known || state.lighting != set.lighting)
             vkCmdBindDescriptorSets(commands, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline_layout, 1u, 1u,
                                     &lighting_descriptor, static_cast<std::uint32_t>(state.lighting.size()),

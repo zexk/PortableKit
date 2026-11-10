@@ -7,6 +7,20 @@
 
 namespace portablekit::gpu {
 
+// ge.frag's framebuffer sampling flags. Indexed views reconstruct the source
+// pixel's packed bits before applying the CLUT shift, mask and palette bank.
+// Keep these below 2^24 so a float push constant carries every bit exactly.
+[[nodiscard]] inline std::uint32_t framebuffer_texture_flags(const TextureState &texture,
+                                                           std::uint32_t source_format) {
+    const auto format = static_cast<std::uint32_t>(texture.format);
+    if (texture.swizzled || source_format > 3u) return 0u;
+    if (format <= 3u)
+        return (format == 3u) == (source_format == 3u) ? 1u : 0u;
+    if (format != (source_format == 3u ? 7u : 6u)) return 0u;
+    return 9u | source_format << 4u | (texture.clut_shift & 31u) << 6u |
+           (texture.clut_mask & 255u) << 11u | (texture.clut_offset & 31u) << 19u;
+}
+
 // Decodes a PSP texture into RGBA8888 (one std::uint32_t per texel, red in the
 // low byte). Handles the direct colour formats, 4/8/16/32-bit palettes, DXT1/3/5
 // and the swizzled layout. Returns false when the texture cannot be read.
