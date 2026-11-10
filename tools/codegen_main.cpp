@@ -1669,8 +1669,8 @@ int generate_auto(const std::filesystem::path &elf_path,
     // slots) and makes only its function entries and block/return
     // continuations dispatcher entries. Anything else that control reaches,
     // such as an unresolved computed jump's target, runs in the interpreter
-    // until it arrives at an entry. Module corpora use it: data decoded as
-    // code, and an entry per word, multiplied their size several times.
+    // until it arrives at an entry. It reduces corpus size when interpreter
+    // fallback for unresolved targets is acceptable.
     std::set<std::uint32_t> emitted_pcs;
     std::set<std::uint32_t> compact_entries;
     if (compact) {

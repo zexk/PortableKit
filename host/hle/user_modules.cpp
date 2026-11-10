@@ -29,6 +29,7 @@ struct UserModule {
     std::uint32_t size{};
     std::uint32_t code_size{}; // the first segment: code and read-only data
     bool code_checked{};       // the corpus was looked for at the first jump in
+    bool checked_before_start{}; // startup must still hand off to post-link hooks
     std::uint64_t code_hash{}; // of the code when it was checked
     bool started{};            // module_start returned, or there is none
     std::uint32_t start{};
@@ -199,6 +200,7 @@ bool user_module_code_miss(Runtime &runtime, AllegrexContext &ctx, std::uint32_t
         // cache flush after linking drops this corpus, so the next dispatch
         // identifies the patched image instead.
         module.code_checked = true;
+        module.checked_before_start = !module.started;
         std::vector<std::uint8_t> code(module.code_size);
         for (std::uint32_t i = 0; i < module.code_size; ++i) code[i] = runtime.memory().load8(module.base + i);
         const std::uint64_t hash = module_code_hash(code);
@@ -223,9 +225,15 @@ bool user_module_code_miss(Runtime &runtime, AllegrexContext &ctx, std::uint32_t
 }
 
 void invalidate_user_module_code(Runtime &runtime, std::uint32_t start, std::uint32_t end) {
+    if (start >= end) return;
     for (auto &[uid, module] : modules()) {
         if (!module.code_checked || end <= module.base || start >= module.base + module.code_size) continue;
         module.invalidated = true;
+        // Cache flushes also cover libraries whose code did not change. Keep
+        // their native entries and hooks; only patched bytes need a new match.
+        const auto *code = runtime.memory().raw_pointer(module.base, module.code_size);
+        if (!module.checked_before_start && code && module_code_hash({code, module.code_size}) == module.code_hash)
+            continue;
         // The code may have been patched: drop what was compiled for it and
         // identify it again, by its bytes then, at its next run.
         runtime.unregister_functions(module.base, module.base + module.code_size);

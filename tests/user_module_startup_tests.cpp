@@ -58,18 +58,31 @@ int main() {
     require(lookups == 1, "Repeated startup lookup");
 
     modules().at(1).started = true;
+    invalidate_user_module_code(runtime, kBase, kBase + 16);
+    require(!modules().at(1).code_checked, "Unchanged startup image skipped post-start handoff");
+    require(user_module_code_miss(runtime, ctx, kBase), "Post-start corpus was not installed");
+    require(lookups == 2, "Post-start image was not searched");
     runtime.memory().store8(kBase, ++expected); // engine links the stage
     invalidate_user_module_code(runtime, kBase, kBase + 16);
     require(!modules().at(1).code_checked, "Cache flush retained startup corpus");
     require(runtime.registered_function(kBase) == nullptr, "Cache flush retained stale native entry");
     require(user_module_code_miss(runtime, ctx, kBase), "Linked corpus was not installed");
-    require(lookups == 2, "Linked image was not searched");
+    require(lookups == 3, "Linked image was not searched");
 
+    invalidate_user_module_code(runtime, kBase, kBase + 16);
+    require(modules().at(1).code_checked && runtime.registered_function(kBase) == &native_entry,
+            "Unchanged code lost its native corpus on a cache flush");
+    require(lookups == 3, "Unchanged code was searched again");
+    runtime.memory().store8(kBase, ++expected);
+    invalidate_user_module_code(runtime, kBase + 4, kBase + 4);
+    require(modules().at(1).code_checked, "Empty cache range invalidated module");
+    invalidate_user_module_code(runtime, kBase + 16, kBase + 32);
+    require(modules().at(1).code_checked, "Disjoint cache range invalidated module");
     invalidate_user_module_code(runtime, kBase, kBase + 16);
     modules().at(1).started = false;
     matched = false;
     require(!user_module_code_miss(runtime, ctx, kBase), "Unknown startup image claimed native coverage");
-    require(lookups == 3, "Unknown startup image was not searched");
+    require(lookups == 4, "Unknown startup image was not searched");
     modules().clear();
     // A PRX without a syslib export must retain its ELF entry. Positional
     // aggregate initialization once put this entry into code_hash instead.
@@ -91,5 +104,23 @@ int main() {
     require(loaded.start == loaded.base + 0x6c && !loaded.started && loaded.code_hash == 0,
             "ELF startup entry or initial lifecycle state was lost");
     require(unload_user_module(runtime, *uid), "Synthetic PRX did not unload");
+    module.started = true;
+    modules().emplace(1, module);
+    matched = true;
+    require(user_module_code_miss(runtime, ctx, kBase), "Range test corpus was not installed");
+    runtime.nids().load_csv(PORTABLEKIT_NIDS_CSV);
+    HleRegistrar hle(runtime);
+    register_system(hle);
+    const auto flush_range = hle.bound_function("UtilsForUser", 0xC2DF770Eu);
+    require(bool(flush_range), "Range flush HLE was not registered");
+    runtime.memory().store8(kBase, ++expected);
+    ctx.gpr[4] = kBase + 16; ctx.gpr[5] = 16;
+    flush_range(runtime, ctx);
+    require(modules().at(1).code_checked, "Range HLE flushed a disjoint module");
+    ctx.gpr[4] = kBase; ctx.gpr[5] = 0xFFFFFFFFu;
+    flush_range(runtime, ctx);
+    require(!modules().at(1).code_checked, "Overflowing range missed patched module");
+    require(runtime.registered_function(kBase) == nullptr, "Range HLE kept patched native code");
+    modules().clear();
     std::puts("user module startup checks passed");
 }

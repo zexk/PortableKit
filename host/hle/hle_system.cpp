@@ -53,14 +53,20 @@ void register_utils(HleRegistrar &hle) {
         hle.add("UtilsForUser", name, success);
     // The guest flushes the instruction cache after copying code into an overlay
     // slot, which is the profile's cue to re-check which overlay is loaded.
-    const auto flush_icache = [](Runtime &rt, AllegrexContext &ctx) {
+    const auto flush_icache = [](Runtime &rt, AllegrexContext &ctx, std::uint32_t start, std::uint32_t end) {
         forget_unmatched_overlays();
         revalidate_overlays(rt);
-        invalidate_user_module_code(rt, 0u, 0xFFFFFFFFu);
+        invalidate_user_module_code(rt, start, end);
         kernel().finish(ctx, 0u);
     };
-    hle.add("UtilsForUser", "sceKernelIcacheInvalidateAll", flush_icache);
-    hle.add("UtilsForUser", "sceKernelIcacheInvalidateRange", flush_icache);
+    hle.add("UtilsForUser", "sceKernelIcacheInvalidateAll", [flush_icache](Runtime &rt, AllegrexContext &ctx) {
+        flush_icache(rt, ctx, 0u, 0xFFFFFFFFu);
+    });
+    hle.add("UtilsForUser", "sceKernelIcacheInvalidateRange", [flush_icache](Runtime &rt, AllegrexContext &ctx) {
+        const auto start = arg(ctx, 0);
+        const auto end = std::min<std::uint64_t>(std::uint64_t(start) + arg(ctx, 1), 0xFFFFFFFFu);
+        flush_icache(rt, ctx, start, static_cast<std::uint32_t>(end));
+    });
     hle.add("UtilsForUser", "sceKernelLibcTime", [](Runtime &rt, AllegrexContext &ctx) {
         const auto seconds = static_cast<std::uint32_t>(guest_unix_us() / 1'000'000u);
         if (arg(ctx, 0) != 0u) rt.memory().store32(arg(ctx, 0), seconds);

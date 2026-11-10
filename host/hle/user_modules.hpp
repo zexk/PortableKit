@@ -45,8 +45,9 @@ bool user_module_code_miss(psprecomp::Runtime &runtime, psprecomp::AllegrexConte
 void set_skip_module_first_run(bool skip);
 
 // The guest invalidated the instruction cache over [start, end), as it does
-// after patching code: every checked module there loses its corpus and is
-// identified again at its next run.
+// after patching code: checked modules whose bytes changed lose their corpus
+// and are identified again at their next run. Startup images also hand off
+// to a post-start match so profile hooks see the linked module.
 void invalidate_user_module_code(psprecomp::Runtime &runtime, std::uint32_t start, std::uint32_t end);
 
 // sceKernelUnloadModule for a user module: frees its memory and drops any

@@ -542,6 +542,8 @@ if(PSPRECOMP_BUILD_TESTS)
     add_executable(portablekit_module_startup_tests
         "${PORTABLEKIT_ROOT}/tests/user_module_startup_tests.cpp" ${_module_test_sources})
     target_compile_features(portablekit_module_startup_tests PRIVATE cxx_std_20)
+    target_compile_definitions(portablekit_module_startup_tests PRIVATE
+        PORTABLEKIT_NIDS_CSV="${PORTABLEKIT_ROOT}/configs/nids.csv")
     target_include_directories(portablekit_module_startup_tests PRIVATE
         "${PORTABLEKIT_ROOT}/host" "${PORTABLEKIT_ROOT}/third_party"
         "${CMAKE_CURRENT_BINARY_DIR}/host_check_nids")
