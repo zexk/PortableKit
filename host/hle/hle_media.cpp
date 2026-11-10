@@ -42,7 +42,7 @@ namespace portablekit {
 namespace {
 
 // <prefix>_TRACE_PACING=N prints the calls that pace a game's frames -- the
-// flip, the vblank waits, the controller reads and the vcount -- with the
+// flip, the vblank waits, the controller reads, the display lists and the vcount -- with the
 // emulated time, the vblank count, how far into the vblank period the call
 // came and the calling thread, N lines of them (3000 when N is not a
 // number), from vblank <prefix>_TRACE_PACING_FROM on (0 by default). It is
@@ -68,7 +68,7 @@ void trace_pacing(const char *call, std::int64_t value = -1) {
                 static_cast<unsigned long long>(kernel().vblank_count()),
                 static_cast<unsigned long long>(now - kernel().last_vblank_us()),
                 thread != nullptr ? thread->name.c_str() : "?", call);
-    if (value >= 0) std::printf(" %lld", static_cast<long long>(value));
+    if (value >= 0) std::printf(" %llx", static_cast<long long>(value));
     std::printf("\n");
     if (lines == limit) std::fflush(stdout);
 }
@@ -166,6 +166,33 @@ void block_transfer(Runtime &rt, const gpu::BlockTransfer &transfer) {
 #endif
 }
 
+// <prefix>_PRESENT_AT_DRAW_SYNC=1 shows a frame when the game has finished
+// drawing it rather than when the game flips to it. A game that draws its
+// back buffer at the start of a frame and flips to it at the start of the
+// next holds every finished picture back a whole frame of its own; here the
+// picture goes out at sceGeDrawSync and the flip to it shows nothing new.
+// Only a target the game has flipped to before is shown early, so off-screen
+// passes are left alone, and drawing into the shown buffer again hands the
+// next flip back to the game.
+struct EarlyPresent {
+    static constexpr std::uint32_t kNone = ~0u;
+    std::array<std::uint32_t, 2> flipped{kNone, kNone}; // VRAM offsets of the last two display buffers
+    std::uint32_t shown = kNone;                        // presented at a draw sync, its flip still to come
+    bool drawn = false;                                 // a display list ran since the last early present
+};
+
+EarlyPresent &early_present() {
+    static EarlyPresent state;
+    return state;
+}
+
+bool present_at_draw_sync() {
+    static const bool value = portablekit::env("PRESENT_AT_DRAW_SYNC") != nullptr;
+    return value;
+}
+
+constexpr std::uint32_t vram_offset(std::uint32_t address) { return address & (kEdramSize - 1u); }
+
 void run_ge_list(Runtime &rt, std::uint32_t id) {
     auto found = media().ge_lists.find(id);
     if (found == media().ge_lists.end()) return;
@@ -206,6 +233,8 @@ void run_ge_list(Runtime &rt, std::uint32_t id) {
         finished = true;
     }
     list.done = finished;
+    early_present().drawn = true;
+    if (vram_offset(media().ge.target().color_address) == early_present().shown) early_present().shown = EarlyPresent::kNone;
     media().ge.set_draw_sink(nullptr);
     media().ge.set_transfer_sink(nullptr);
     perf::add_render_time(perf::Clock::now() - start);
@@ -559,8 +588,19 @@ void register_display_ctrl(HleRegistrar &hle) {
         media().display.framebuffer = arg(ctx, 0);
         media().display.buffer_width = arg(ctx, 1);
         media().display.pixel_format = arg(ctx, 2);
-        trace_pacing("sceDisplaySetFrameBuf");
+        // Value: the buffer address, with the sync argument above bit 32.
+        trace_pacing("sceDisplaySetFrameBuf", (static_cast<std::int64_t>(arg(ctx, 3)) << 32) | arg(ctx, 0));
         stall_watchdog::note_frame();
+        if (present_at_draw_sync()) {
+            EarlyPresent &early = early_present();
+            const std::uint32_t offset = vram_offset(arg(ctx, 0));
+            if (offset != early.flipped[0]) early.flipped = {offset, early.flipped[0]};
+            if (offset == early.shown) {
+                kernel().finish(ctx, 0u);
+                return;
+            }
+            early.shown = EarlyPresent::kNone;
+        }
         present_frame(rt);
         kernel().finish(ctx, 0u);
     });
@@ -608,6 +648,7 @@ void register_display_ctrl(HleRegistrar &hle) {
     // Peeking returns the latest sample at once.
     hle.add("sceCtrl", "sceCtrlPeekBufferPositive", [](Runtime &rt, AllegrexContext &ctx) {
         const std::uint32_t count = std::clamp<std::uint32_t>(arg(ctx, 1), 1u, 64u);
+        trace_pacing("sceCtrlPeekBufferPositive");
         write_ctrl_buffer(rt.memory(), arg(ctx, 0), count, sample_ctrl());
         kernel().finish(ctx, count);
     });
@@ -736,6 +777,7 @@ void register_ge(HleRegistrar &hle) {
         list.callback = static_cast<std::int32_t>(arg(ctx, 2));
         media().ge_lists[id] = std::move(list);
         perf::count_display_list();
+        trace_pacing("sceGeListEnQueue");
         run_ge_list(rt, id);
         kernel().finish(ctx, id);
     };
@@ -748,6 +790,7 @@ void register_ge(HleRegistrar &hle) {
             return;
         }
         found->second.stall = arg(ctx, 1) & 0x0FFFFFFFu;
+        trace_pacing("sceGeListUpdateStallAddr");
         run_ge_list(rt, arg(ctx, 0));
         kernel().finish(ctx, 0u);
     });
@@ -757,8 +800,24 @@ void register_ge(HleRegistrar &hle) {
         const std::uint32_t state = found == media().ge_lists.end() || found->second.done ? 0u : 2u;
         kernel().finish(ctx, state);
     });
-    hle.add("sceGe_user", "sceGeDrawSync", [](Runtime &, AllegrexContext &ctx) {
+    hle.add("sceGe_user", "sceGeDrawSync", [](Runtime &rt, AllegrexContext &ctx) {
+        trace_pacing("sceGeDrawSync", media().ge.target().color_address); // value: the target drawn last
         std::erase_if(media().ge_lists, [](const auto &item) { return item.second.done; });
+        if (EarlyPresent &early = early_present(); present_at_draw_sync() && early.drawn) {
+            const std::uint32_t target = media().ge.target().color_address;
+            const std::uint32_t offset = vram_offset(target);
+            const std::uint32_t showing = media().display.framebuffer;
+            if ((target & 0x1F000000u) == kEdramBase && offset != vram_offset(showing) &&
+                (offset == early.flipped[0] || offset == early.flipped[1])) {
+                early.drawn = false;
+                trace_pacing("present at draw sync", target);
+                media().display.framebuffer = target;
+                stall_watchdog::note_frame();
+                present_frame(rt);
+                media().display.framebuffer = showing;
+                early.shown = offset;
+            }
+        }
         kernel().finish(ctx, 0u);
     });
     hle.add("sceGe_user", "sceGeBreak", [](Runtime &, AllegrexContext &ctx) { kernel().finish(ctx, 0u); });
