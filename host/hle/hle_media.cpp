@@ -64,7 +64,11 @@ void trace_pacing(const char *call, std::int64_t value = -1) {
     ++lines;
     const std::uint64_t now = kernel().now_us();
     const Thread *thread = kernel().current_thread();
-    std::printf("[pacing] %12.3f ms v%-7llu +%5llu us %-20s %s", static_cast<double>(now) / 1000.0,
+    // Real time beside the emulated: the two part ways when a load runs fast
+    // or the hold to real time is released.
+    static const auto real_start = std::chrono::steady_clock::now();
+    const double real_ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - real_start).count();
+    std::printf("[pacing] %12.3f ms real %10.3f v%-7llu +%5llu us %-20s %s", static_cast<double>(now) / 1000.0, real_ms,
                 static_cast<unsigned long long>(kernel().vblank_count()),
                 static_cast<unsigned long long>(now - kernel().last_vblank_us()),
                 thread != nullptr ? thread->name.c_str() : "?", call);
@@ -365,8 +369,10 @@ void present_frame(Runtime &rt) {
     renderer.set_fast_forward(fast_loading::active());
     // The real time the frame stands for, which frame interpolation spaces
     // its presents by: that of the vblank the game's frame started from.
-    const bool presented = renderer.present(
-        address, kernel().real_time_of(frame_start_us(frame_vblank_override().value_or(kernel().last_vblank_us()))));
+    // An early frame's vblank is its own start: no grid to put it on.
+    const std::uint64_t frame_start = frame_vblank_override() ? *frame_vblank_override()
+                                                              : frame_start_us(kernel().last_vblank_us());
+    const bool presented = renderer.present(address, kernel().real_time_of(frame_start));
     // The frame's camera has been measured by now, so the hunt for the guest
     // variables behind it can compare RAM against it.
     probe::camera_frame(rt, media().ge.view_matrix_source());
