@@ -67,6 +67,9 @@ struct Settings {
     // Show a frame when the game has finished drawing it, not when the game
     // flips to it a frame of its own later (hle_media.cpp, EarlyPresent).
     bool present_at_draw_sync{};
+    // With it: wait for real time at the controller read, not at the game's
+    // vblank waits (hle_media.cpp, pace_at_pad_read).
+    bool pace_at_pad_read{};
     PerfDisplay perf{PerfDisplay::Off};
 
     // Text

@@ -104,6 +104,7 @@ private:
 
     void video();
     void audio();
+    void gameplay();
     void controls();
     void tilt_controls();
     void network();
@@ -142,12 +143,12 @@ bool Menu::frame() {
     // Back closes the font list, or the save import and export, before it
     // closes the menu.
     const bool font_list_was_open = (tab_ == 0 && (font_list_open() || texture_pack_screen_open())) ||
-                                    (tab_ == 4 && save_screen_open());
+                                    (tab_ == 5 && save_screen_open());
     back_ = back || pad_back;
 
     begin_panel("##menu", portablekit::game().project_name, paused_ ? "Paused" : "Running", true);
-    static const char *const kTabs[] = {"Video", "Audio", "Controls", "Network", "System"};
-    const bool switched = tab_bar(kTabs, 5, tab_) || first_frame_;
+    static const char *const kTabs[] = {"Video", "Audio", "Controls", "Game", "Network", "System"};
+    const bool switched = tab_bar(kTabs, 6, tab_) || first_frame_;
     first_frame_ = false;
     begin_content();
     if (switched) {
@@ -158,11 +159,12 @@ bool Menu::frame() {
     case 0: video(); break;
     case 1: audio(); break;
     case 2: controls(); break;
-    case 3: network(); break;
+    case 3: gameplay(); break;
+    case 4: network(); break;
     default: system(); break;
     }
     begin_footer();
-    if (tab_ == 4)
+    if (tab_ == 5)
         hints({{Control::Confirm, "Select"}, {Control::Back, "Back"}, {Control::Tabs, "Section"},
                {Control::Menu, "Resume"}});
     else
@@ -411,15 +413,6 @@ void Menu::video() {
             settings::save();
         }
     }
-    if (toggle_row("Show frames early", s.present_at_draw_sync,
-                   options_for("video.present_at_draw_sync",
-                               "Shows each frame as soon as the game has drawn it instead of when the game "
-                               "switches to it, which many games do a whole frame of their own later. Makes "
-                               "the game quicker to react. Turn it off if the picture flickers or shows "
-                               "unfinished frames."))) {
-        s.present_at_draw_sync = !s.present_at_draw_sync;
-        settings::save();
-    }
     {
         RowOptions o = options_for("video.frame_rate_auto",
                                    "On lowers the frame rate by itself when presenting that often would slow the "
@@ -428,26 +421,6 @@ void Menu::video() {
         if (choice_row("Lower when behind", s.frame_rate_auto ? "On" : "Off", o)) {
             s.frame_rate_auto = !s.frame_rate_auto;
             renderer().set_frame_rate_auto(s.frame_rate_auto);
-            settings::save();
-        }
-    }
-    if (choice_row("Game speed", s.unthrottled ? "Unlimited" : "Normal",
-                   options_for("video.unthrottled", "Normal holds the game to real time. Unlimited lets it run as "
-                                                    "fast as frames can be drawn, which also speeds up the game."))) {
-        s.unthrottled = !s.unthrottled;
-        settings::save();
-    }
-    {
-        RowOptions o = options_for("video.fast_loading",
-                                   "Lets the game run ahead of real time while it loads and is silent, so loads "
-                                   "take as long as the computer needs. Never during play, sound, movies or "
-                                   "ad hoc play.");
-        if (s.unthrottled && !o.disabled) {
-            o.disabled = true;
-            o.note = "Game speed is Unlimited";
-        }
-        if (toggle_row("Fast loading", s.fast_loading, o)) {
-            s.fast_loading = !s.fast_loading;
             settings::save();
         }
     }
@@ -485,9 +458,6 @@ void Menu::video() {
         restore("video.frame_rate", s.frame_rate, d.frame_rate);
         restore("video.frame_rate_auto", s.frame_rate_auto, d.frame_rate_auto);
         restore("video.interpolation_lead", s.interpolation_lead_percent, d.interpolation_lead_percent);
-        restore("video.present_at_draw_sync", s.present_at_draw_sync, d.present_at_draw_sync);
-        restore("video.unthrottled", s.unthrottled, d.unthrottled);
-        restore("video.fast_loading", s.fast_loading, d.fast_loading);
         restore("video.performance", s.perf, d.perf);
         renderer().set_internal_scale(s.internal_scale);
         renderer().set_fullscreen(s.fullscreen);
@@ -500,6 +470,87 @@ void Menu::video() {
         renderer().set_frame_rate(s.frame_rate);
         renderer().set_frame_rate_auto(s.frame_rate_auto);
         renderer().set_perf_overlay(perf::options().overlay);
+        settings::save();
+    }
+}
+
+// What changes how the game runs rather than how it looks or sounds.
+void Menu::gameplay() {
+    settings::Settings &s = settings::current();
+    section("Speed");
+    if (choice_row("Game speed", s.unthrottled ? "Unlimited" : "Normal",
+                   options_for("video.unthrottled", "Normal holds the game to real time. Unlimited lets it run as "
+                                                    "fast as frames can be drawn, which also speeds up the game."))) {
+        s.unthrottled = !s.unthrottled;
+        settings::save();
+    }
+    {
+        RowOptions o = options_for("video.fast_loading",
+                                   "Lets the game run ahead of real time while it loads and is silent, so loads "
+                                   "take as long as the computer needs. Never during play, sound, movies or "
+                                   "ad hoc play.");
+        if (s.unthrottled && !o.disabled) {
+            o.disabled = true;
+            o.note = "Game speed is Unlimited";
+        }
+        if (toggle_row("Fast loading", s.fast_loading, o)) {
+            s.fast_loading = !s.fast_loading;
+            settings::save();
+        }
+    }
+    section("Response");
+    if (toggle_row("Show frames early", s.present_at_draw_sync,
+                   options_for("video.present_at_draw_sync",
+                               "Shows each frame as soon as the game has drawn it instead of when the game "
+                               "switches to it, which many games do a whole frame of their own later. Makes "
+                               "the game quicker to react. Turn it off if the picture flickers or shows "
+                               "unfinished frames."))) {
+        s.present_at_draw_sync = !s.present_at_draw_sync;
+        settings::save();
+    }
+    {
+        RowOptions o = options_for("video.pace_at_pad_read",
+                                   "Many games read the controller, work out the next frame and then wait before "
+                                   "drawing it. On, the wait comes before the controller is read instead, so the "
+                                   "picture shows what you pressed a frame of the game sooner. Turn it off if the "
+                                   "sound stutters or the game's speed is uneven.");
+        if (!s.present_at_draw_sync && !o.disabled) {
+            o.disabled = true;
+            o.note = "Needs Show frames early";
+        }
+        if (toggle_row("Read the controller late", s.pace_at_pad_read, o)) {
+            s.pace_at_pad_read = !s.pace_at_pad_read;
+            settings::save();
+        }
+    }
+    section("Menu");
+    if (toggle_row("Pause the game when the menu opens", s.menu_pause,
+                   options_for("ui.menu_pause", "On: the game stops while this menu is open. Off: it keeps running "
+                                                "and playing sound behind the menu, which takes all input. Applies "
+                                                "the next time the menu opens."))) {
+        s.menu_pause = !s.menu_pause;
+        settings::save();
+    }
+    if (toggle_row("Pause during multiplayer", s.menu_pause_multiplayer,
+                   options_for("ui.menu_pause_multiplayer",
+                               "In ad hoc play the game keeps running behind the menu unless this is on: a paused "
+                               "game stops answering the other players and can drop a quest. Applies the next time "
+                               "the menu opens."))) {
+        s.menu_pause_multiplayer = !s.menu_pause_multiplayer;
+        settings::save();
+    }
+    ImGui::Dummy({0.0f, font_gap()});
+    if (button_row("Restore game defaults", {false, {}, std::string("Every setting on this page back to how ") + portablekit::game().project_name + " ships."})) {
+        const settings::Settings &d = settings::defaults();
+        const auto restore = [&](const char *key, auto &value, const auto &fallback) {
+            if (settings::overridden_by(key).empty()) value = fallback;
+        };
+        restore("video.unthrottled", s.unthrottled, d.unthrottled);
+        restore("video.fast_loading", s.fast_loading, d.fast_loading);
+        restore("video.present_at_draw_sync", s.present_at_draw_sync, d.present_at_draw_sync);
+        restore("video.pace_at_pad_read", s.pace_at_pad_read, d.pace_at_pad_read);
+        restore("ui.menu_pause", s.menu_pause, d.menu_pause);
+        restore("ui.menu_pause_multiplayer", s.menu_pause_multiplayer, d.menu_pause_multiplayer);
         settings::save();
     }
 }
@@ -1406,21 +1457,6 @@ void Menu::system() {
     section("Game");
     if (button_row("Resume", {false, {}, "Back to the game."})) close_ = true;
     settings::Settings &s = settings::current();
-    if (toggle_row("Pause the game when the menu opens", s.menu_pause,
-                   options_for("ui.menu_pause", "On: the game stops while this menu is open. Off: it keeps running "
-                                                "and playing sound behind the menu, which takes all input. Applies "
-                                                "the next time the menu opens."))) {
-        s.menu_pause = !s.menu_pause;
-        settings::save();
-    }
-    if (toggle_row("Pause during multiplayer", s.menu_pause_multiplayer,
-                   options_for("ui.menu_pause_multiplayer",
-                               "In ad hoc play the game keeps running behind the menu unless this is on: a paused "
-                               "game stops answering the other players and can drop a quest. Applies the next time "
-                               "the menu opens."))) {
-        s.menu_pause_multiplayer = !s.menu_pause_multiplayer;
-        settings::save();
-    }
 #if defined(PORTABLEKIT_ANDROID_APP)
     // An Android app's data folder is out of the file manager's reach; its
     // log goes where the player picks instead, to send with a report.

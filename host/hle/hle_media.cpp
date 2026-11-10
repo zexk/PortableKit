@@ -170,7 +170,7 @@ void block_transfer(Runtime &rt, const gpu::BlockTransfer &transfer) {
 #endif
 }
 
-// video.present_at_draw_sync (Video > Show frames early) shows a frame when the game has finished
+// video.present_at_draw_sync (Game > Show frames early) shows a frame when the game has finished
 // drawing it rather than when the game flips to it. A game that draws its
 // back buffer at the start of a frame and flips to it at the start of the
 // next holds every finished picture back a whole frame of its own; here the
@@ -185,7 +185,7 @@ struct EarlyPresent {
     std::uint32_t previous = kNone;                     // on screen before it: a flip back shows nothing new
     std::uint32_t skipped = 0;                          // flips passed over since the last early present
     bool drawn = false;                                 // a display list ran since the last early present
-    // <prefix>_PACE_AT_PAD_READ (with the setting above), see pace_at_pad_read().
+    // See pace_at_pad_read().
     bool ahead = false;                    // emulated time was let run ahead since the last controller read
     std::optional<std::uint64_t> moment;   // the vblank whose real time the next early frame stands for
 };
@@ -197,7 +197,8 @@ EarlyPresent &early_present() {
 
 bool present_at_draw_sync() { return settings::current().present_at_draw_sync; }
 
-// <prefix>_PACE_AT_PAD_READ=1, with frames shown early: a game whose loop is
+// video.pace_at_pad_read (Game > Read the controller late), with frames shown
+// early: a game whose loop is
 // "flip, draw, read the pad, update, wait for vblanks" has the wait between
 // reading the pad and drawing what came of it. After a read, emulated time
 // then runs ahead of real time through those waits, and the next read shows
@@ -208,10 +209,7 @@ bool present_at_draw_sync() { return settings::current().present_at_draw_sync; }
 // before it. The kernel ends the running ahead by itself when no read comes
 // (Kernel::release_pacing), so a loop that stops reading the pad is held as
 // usual.
-bool pace_at_pad_read() {
-    static const bool value = portablekit::env("PACE_AT_PAD_READ") != nullptr;
-    return value && present_at_draw_sync();
-}
+bool pace_at_pad_read() { return settings::current().pace_at_pad_read && present_at_draw_sync(); }
 
 constexpr std::uint32_t vram_offset(std::uint32_t address) { return address & (kEdramSize - 1u); }
 
