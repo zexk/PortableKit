@@ -523,6 +523,7 @@ void Menu::gameplay() {
             settings::save();
         }
     }
+    if (portablekit::game().draw_game_settings) portablekit::game().draw_game_settings();
     section("Menu");
     if (toggle_row("Pause the game when the menu opens", s.menu_pause,
                    options_for("ui.menu_pause", "On: the game stops while this menu is open. Off: it keeps running "
@@ -551,6 +552,7 @@ void Menu::gameplay() {
         restore("video.pace_at_pad_read", s.pace_at_pad_read, d.pace_at_pad_read);
         restore("ui.menu_pause", s.menu_pause, d.menu_pause);
         restore("ui.menu_pause_multiplayer", s.menu_pause_multiplayer, d.menu_pause_multiplayer);
+        if (portablekit::game().reset_game_settings) portablekit::game().reset_game_settings();
         settings::save();
     }
 }

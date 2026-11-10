@@ -260,6 +260,11 @@ struct GameProfile {
     void (*module_code_ready)(psprecomp::Runtime &, std::string_view name, std::uint32_t base,
                               std::span<const std::uint8_t> code) = nullptr;
 
+    // Optional port-owned controls drawn in the Game tab, and their reset
+    // when the player restores that page's defaults. The port owns persistence.
+    void (*draw_game_settings)() = nullptr;
+    void (*reset_game_settings)() = nullptr;
+
     // --- The game's camera and view ----------------------------------------
     // Drives the game's own camera from what the player asks of it
     // (camera/camera_input.hpp). Only a game knows where its camera lives and
