@@ -6202,6 +6202,30 @@ void VulkanRenderer::submit(const DrawCall &call, const GuestMemory &memory) {
 
     static const bool trace = portablekit::env("TRACE_GE") != nullptr;
     static const bool trace3d = portablekit::env("TRACE_3D") != nullptr;
+    // <prefix>_DUMP_FRAME=N: one line for every draw of frame N, in order: where
+    // it draws, what with and how it is blended, to tell a frame's passes apart.
+    static const std::uint64_t dump_frame = [] {
+        const char *text = portablekit::env("DUMP_FRAME");
+        return text != nullptr ? std::strtoull(text, nullptr, 10) : ~0ull;
+    }();
+    if (impl.frames == dump_frame)
+        std::printf("[draw] fb %08x %s prim %d n %zu type %08x tex %08x %ux%u fmt %d blend %d %u/%u eq %u fix %06x/%06x "
+                    "depth %d%d f%u alpha %d f%u ref %u cull %d light %d mat %08x at %.0f %.0f %.0f verts %08x\n",
+                    call.target.color_address, call.clear_mode ? "clear" : call.through ? "through" : "3d",
+                    static_cast<int>(call.primitive), count, call.vertex_type,
+                    call.texture.enabled ? call.texture.address : 0u, call.texture.width, call.texture.height,
+                    static_cast<int>(call.texture.format), call.blend.enabled ? 1 : 0, call.blend.source_factor,
+                    call.blend.destination_factor, call.blend.equation, call.blend.fixed_source,
+                    call.blend.fixed_destination, call.depth.test_enabled ? 1 : 0, call.depth.write_enabled ? 1 : 0,
+                    call.depth.function, call.alpha_test.enabled ? 1 : 0, call.alpha_test.function,
+                    call.alpha_test.reference, call.culling_enabled ? 1 : 0, call.lighting_enabled ? 1 : 0,
+                    call.material_color, static_cast<double>(call.world[12]), static_cast<double>(call.world[13]),
+                    static_cast<double>(call.world[14]), call.vertex_address);
+    if (impl.frames == dump_frame && !call.vertices.empty() && call.vertices.size() <= 4u)
+        for (const Vertex &v : call.vertices)
+            std::printf("[draw]   v %.1f %.1f %.1f uv %.3f %.3f colour %08x\n", static_cast<double>(v.position[0]),
+                        static_cast<double>(v.position[1]), static_cast<double>(v.position[2]),
+                        static_cast<double>(v.texcoord[0]), static_cast<double>(v.texcoord[1]), v.color);
     // <prefix>_TRACE_SPRITES=N: every through-mode sprite of frame N, with the
     // texture state it samples, to find the tiles a 2D screen is built from.
     static const std::uint64_t trace_sprites_frame = [] {
