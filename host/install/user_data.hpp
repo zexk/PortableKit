@@ -30,6 +30,14 @@ inline constexpr const char *kPortableFolder = "portable";
 // the directory if it does not exist yet.
 [[nodiscard]] std::filesystem::path user_data_directory();
 
+// From here on, what the program writes to std::cout and std::cerr also goes
+// to <app_name>.log in the data directory, the run before's kept as
+// <app_name>-previous.log, so a player can send it after the console window
+// has gone. The console gets everything as before; printf traces stay there
+// only. Not on Android, which redirects itself (android_app.cpp);
+// <prefix>_NO_LOG_FILE leaves it out.
+void start_log_file();
+
 // Every key=value line of settings.ini. The installer owns disc_image; the
 // player's settings (host/settings) keep their keys next to it, and writing
 // one never drops the others.

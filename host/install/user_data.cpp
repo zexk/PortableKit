@@ -5,8 +5,11 @@
 
 #include "psprecomp/common.hpp"
 
+#include <cstdio>
 #include <cstdlib>
 #include <fstream>
+#include <iostream>
+#include <streambuf>
 #include <system_error>
 
 #if defined(PORTABLEKIT_HAS_SDL)
@@ -132,6 +135,63 @@ std::optional<Installation> find_installation(const std::filesystem::path &data_
     installation.disc_image = settings.disc_image.is_absolute() ? settings.disc_image : data_dir / settings.disc_image;
     installation.image_copied = !settings.disc_image.is_absolute();
     return installation;
+}
+
+namespace {
+
+// Passes what a standard stream writes on to the buffer it had, and copies
+// it to the log. It keeps nothing itself, so threads that share a stream
+// share nothing more here.
+class LogCopy : public std::streambuf {
+public:
+    LogCopy(std::streambuf *before, std::FILE *log) : before_(before), log_(log) {}
+
+protected:
+    int overflow(int c) override {
+        if (traits_type::eq_int_type(c, traits_type::eof())) return traits_type::not_eof(c);
+        const char ch = traits_type::to_char_type(c);
+        std::fwrite(&ch, 1u, 1u, log_);
+        return before_->sputc(ch);
+    }
+    std::streamsize xsputn(const char *text, std::streamsize count) override {
+        std::fwrite(text, 1u, static_cast<std::size_t>(count), log_);
+        return before_->sputn(text, count);
+    }
+    int sync() override { return before_->pubsync(); }
+
+private:
+    std::streambuf *before_;
+    std::FILE *log_;
+};
+
+} // namespace
+
+void start_log_file() {
+#if !defined(PORTABLEKIT_ANDROID_APP)
+    static bool started = false;
+    if (started || portablekit::env("NO_LOG_FILE") != nullptr) return;
+    started = true;
+    std::FILE *log = nullptr;
+    try {
+        const std::filesystem::path dir = user_data_directory();
+        const std::string app = game().app_name;
+        std::error_code ec;
+        std::filesystem::rename(dir / (app + ".log"), dir / (app + "-previous.log"), ec);
+#if defined(_WIN32)
+        log = _wfopen((dir / (app + ".log")).c_str(), L"wb");
+#else
+        log = std::fopen((dir / (app + ".log")).c_str(), "wb");
+#endif
+    } catch (const std::exception &) {
+    }
+    if (log == nullptr) return;
+    // Unbuffered: a crash keeps every line written before it.
+    std::setvbuf(log, nullptr, _IONBF, 0);
+    // Never freed, nor the file closed: the streams outlive every static object.
+    for (std::ostream *stream : {static_cast<std::ostream *>(&std::cout), static_cast<std::ostream *>(&std::cerr),
+                                 static_cast<std::ostream *>(&std::clog)})
+        stream->rdbuf(new LogCopy(stream->rdbuf(), log));
+#endif
 }
 
 } // namespace portablekit::install

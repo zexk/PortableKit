@@ -367,6 +367,7 @@ int main(int argc, char **argv) {
         }
 #endif
 
+        portablekit::install::start_log_file();
         const std::optional<GameFiles> files = locate_game(options);
         if (!files) return 1;
         const std::filesystem::path &executable = files->executable;
