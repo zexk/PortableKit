@@ -176,6 +176,16 @@ void test_store() {
     check(fallback.status == LoadStatus::Ok && fallback.contents.data == contents.data && !fallback.reason.empty(),
           "a broken save falls back on the one before it");
 
+    // A file that cannot be put in place fails the save and leaves nothing
+    // half-made behind: here a directory stands where the data file goes.
+    std::filesystem::remove(folder / "DATA.BIN");
+    std::filesystem::create_directories(folder / "DATA.BIN" / "in-the-way");
+    check(load_save(root, files).contents.data == contents.data,
+          "a data file that cannot be read falls back on the save before it");
+    check(!write_save(root, files, newer, error) && !std::filesystem::exists(folder / "DATA.BIN.tmp"),
+          "a failed write leaves no temporary file in the save folder");
+    std::filesystem::remove_all(folder / "DATA.BIN");
+
     SaveFiles missing = files;
     missing.save_name = "OTHER";
     check(load_save(root, missing).status == LoadStatus::NoData, "a missing save reports no data");

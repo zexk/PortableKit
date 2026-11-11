@@ -11,6 +11,7 @@
 #include <fstream>
 #include <iostream>
 #include <random>
+#include <thread>
 
 #if defined(_WIN32)
 #include <io.h>
@@ -31,10 +32,18 @@ constexpr std::size_t kFileListNameSize = 13u;
 // key, which is what this game does.
 constexpr CryptMode kSaveMode = CryptMode::Mode5;
 
+// Nothing for a file that is not there or cannot be read: libstdc++ throws
+// on a read error, which would end the game in the middle of a load.
 std::optional<std::vector<std::uint8_t>> read_file(const std::filesystem::path &path) {
+    std::error_code ec;
+    if (!std::filesystem::is_regular_file(path, ec)) return std::nullopt;
     std::ifstream in(path, std::ios::binary);
     if (!in) return std::nullopt;
-    return std::vector<std::uint8_t>(std::istreambuf_iterator<char>(in), std::istreambuf_iterator<char>());
+    try {
+        return std::vector<std::uint8_t>(std::istreambuf_iterator<char>(in), std::istreambuf_iterator<char>());
+    } catch (const std::exception &) {
+        return std::nullopt;
+    }
 }
 
 bool write_file(const std::filesystem::path &path, const std::vector<std::uint8_t> &bytes) {
@@ -56,10 +65,18 @@ bool write_file(const std::filesystem::path &path, const std::vector<std::uint8_
     written = written && fsync(fileno(out)) == 0;
 #endif
     written = std::fclose(out) == 0 && written;
-    if (!written) return false;
     std::error_code ec;
-    std::filesystem::rename(temporary, path, ec);
-    return !ec;
+    // On Windows a virus scanner or an indexer can hold a file it has just
+    // seen written, and the rename is refused while it does: try again for
+    // half a second before calling the save failed.
+    for (int attempt = 0; written && attempt < 10; ++attempt) {
+        std::filesystem::rename(temporary, path, ec);
+        if (!ec) return true;
+        std::this_thread::sleep_for(std::chrono::milliseconds(50));
+    }
+    // Nothing half-made stays in the folder, which is exported as it is.
+    std::filesystem::remove(temporary, ec);
+    return false;
 }
 
 // A hash stored in the file list for `name`, if any.
@@ -116,8 +133,14 @@ LoadResult load_folder(const std::filesystem::path &folder, const SaveFiles &fil
     const auto sfo_bytes = read_file(folder / kParamSfo);
     const auto sfo = sfo_bytes ? ParamSfo::parse(*sfo_bytes) : std::nullopt;
     const auto file = read_file(folder / files.file_name);
-    if (!file) return result;  // the folder exists but the game's file does not
+    std::error_code ec;
+    // The folder exists but the game's file does not.
+    if (!file && !std::filesystem::exists(folder / files.file_name, ec)) return result;
     result.status = LoadStatus::Broken;
+    if (!file) {
+        result.reason = files.file_name + " cannot be read";
+        return result;
+    }
     if (!sfo) {
         result.reason = "PARAM.SFO is unreadable";
         return result;
