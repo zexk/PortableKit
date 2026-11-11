@@ -930,10 +930,11 @@ void Menu::controls() {
             }
         }
         if (driver->follows) {
+            // Shown the other way round from how it is kept: off is the game as it was.
             o = options_for("input.camera_follow",
-                            "The camera swings round behind the character as it moves, as the game does. Off "
-                            "leaves the camera where you put it; recentring still works.");
-            if (toggle_row("Camera follows behind", s.camera_follow, o)) {
+                            "Off, the camera swings round behind the character as it moves, as the game does. "
+                            "On leaves the camera where you put it; recentring still works.");
+            if (toggle_row("Disable camera follow", !s.camera_follow, o)) {
                 s.camera_follow = !s.camera_follow;
                 settings::save();
             }
