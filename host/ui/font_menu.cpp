@@ -25,9 +25,9 @@
 namespace portablekit::ui {
 namespace {
 
-// The preview line: English as the patched game shows it, and some of the
-// Japanese it still has.
-constexpr char32_t kPreviewText[] = U"Urgent Quest  Yukumo Chief  1500z  装備 アイテム";
+// The preview line: Latin letters and digits as a game's menus show them,
+// and some Japanese.
+constexpr char32_t kPreviewText[] = U"Continue  Options  1500  装備 アイテム";
 // Text height in PSP pixels of most of the game's text.
 constexpr float kPreviewTextSize = 14.0f;
 constexpr int kPreviewWidth = 1024;

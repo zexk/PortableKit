@@ -612,8 +612,8 @@ void save_rows() {
                                      "a folder holding it or the save folders. A save it replaces is kept."}))
         open_browser(Stage::ChooseImport);
     if (button_row("Export save…", {!available, {},
-                                     "Copy your game data and downloaded quests to a folder you pick (Android does "
-                                     "not offer Download itself: make or pick a folder in it)."}))
+                                     "Copy your saves to a folder you pick (Android does not offer Download itself: "
+                                     "make or pick a folder in it)."}))
         open_browser(Stage::ChooseExport);
 #else
     if (button_row("Import save…", {!available, {},
@@ -622,13 +622,12 @@ void save_rows() {
                                      "it. A save it replaces is kept, not deleted."}))
         open_browser(Stage::ChooseImport);
     if (button_row("Export save…", {!available, {},
-                                     "Copy your game data and downloaded quests to a folder you choose, to take them "
-                                     "to a PSP or another machine."}))
+                                     "Copy your saves to a folder you choose, to take them to a PSP or another "
+                                     "machine."}))
         open_browser(Stage::ChooseExport);
 #endif
     if (button_row("Back up saves…", {!available, {},
-                                      "Copy all of this game's saves, the install data included, to the backups "
-                                      "folder or a folder you choose."}))
+                                      "Copy all of this game's saves to the backups folder or a folder you choose."}))
         go(Stage::Backup);
 #if !defined(PORTABLEKIT_ANDROID_APP)
     if (button_row("Open the saves folder",

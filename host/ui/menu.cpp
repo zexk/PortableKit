@@ -229,7 +229,8 @@ void Menu::video() {
     {
         const int delta =
             choice_row("Display", s.fullscreen ? "Fullscreen" : "Window",
-                       options_for("video.fullscreen", "Fill the screen, or play in a window you can resize."));
+                       options_for("video.fullscreen", "Fill the screen, or play in a window you can resize. F11 "
+                                                       "switches between them too."));
         if (delta != 0) {
             s.fullscreen = !s.fullscreen;
             renderer().set_fullscreen(s.fullscreen);
@@ -566,8 +567,8 @@ void Menu::gameplay() {
     if (portablekit::game().adhoc_menu && toggle_row("Pause during multiplayer", s.menu_pause_multiplayer,
                    options_for("ui.menu_pause_multiplayer",
                                "In ad hoc play the game keeps running behind the menu unless this is on: a paused "
-                               "game stops answering the other players and can drop a quest. Applies the next time "
-                               "the menu opens."))) {
+                               "game stops answering the other players and can drop the session. Applies the next "
+                               "time the menu opens."))) {
         s.menu_pause_multiplayer = !s.menu_pause_multiplayer;
         settings::save();
     }
@@ -895,8 +896,8 @@ void Menu::controls() {
         const int current = static_cast<int>(s.right_stick);
         if (const int delta = choice_row(
                 "Right stick", kModes[current],
-                options_for("input.right_stick", "Camera uses the HD release's own right-stick camera. D-pad "
-                                                 "presses the D-pad instead, like the PSP's camera controls."))) {
+                options_for("input.right_stick", "Camera turns the camera with the right stick. D-pad presses the "
+                                                 "D-pad instead, as the PSP's own camera controls did."))) {
             s.right_stick = static_cast<settings::RightStick>(cycle(current, delta, 3));
             settings::save();
         }
@@ -909,9 +910,9 @@ void Menu::controls() {
     // pushed; for any other the rows would change nothing.
     if (const CameraDriver *driver = portablekit::game().camera; driver != nullptr) {
         RowOptions o = options_for("input.analog_camera",
-                                   "Turn and tilt the quest camera as far as the stick is pushed, instead of the "
-                                   "game's fixed-speed turn and vertical presets. Release holds the angle; the D-pad "
-                                   "and recentre return to the game's camera. Off is the game's own camera, untouched.");
+                                   "Turn and tilt the camera as far as the stick is pushed, instead of at the game's "
+                                   "fixed speeds. Release holds the angle; the D-pad and recentre return to the "
+                                   "game's camera. Off is the game's own camera, untouched.");
         if (!camera && !o.disabled) {
             o.disabled = true;
             o.note = "Right stick is not the camera";
@@ -1028,9 +1029,12 @@ void Menu::controls() {
             s.mouse = !s.mouse;
             settings::save();
         }
+        const CameraDriver *aims = portablekit::game().camera;
         o = options_for("input.mouse_sensitivity",
-                        "How far the camera turns for mouse motion: 1.0x turns it 0.1 degrees a count. While a "
-                        "bow or a bowgun aims, the mouse is slowed as Aim speed is to Camera speed.");
+                        std::string("How far the camera turns for mouse motion: 1.0x turns it 0.1 degrees a count.") +
+                            (aims != nullptr && aims->aim_boost != nullptr
+                                 ? " While aiming, the mouse is slowed as Aim speed is to Camera speed."
+                                 : ""));
         if (!s.mouse && !o.disabled) {
             o.disabled = true;
             o.note = "Mouse is off";
@@ -1091,8 +1095,63 @@ void Menu::controls() {
             layer.begin_binding_capture();
         }
     }
+    if (button_row("Use the classic keyboard layout",
+                   {false, {}, "The keys of earlier versions, for play without a mouse: I J K L move, Z X A S are "
+                               "the face buttons, Q and W are L and R."})) {
+        s.bindings = input::classic_bindings();
+        settings::save();
+    }
     info_row("Esc", "This menu");
     info_row("F3", "Performance overlay");
+#if !defined(__ANDROID__)
+    info_row("F11", "Fullscreen or window");
+#endif
+    info_row("F12", "Screenshot");
+
+    section("Touch screen");
+    {
+        RowOptions o = options_for("input.touch_controls",
+                                   "A pad drawn over the game once the screen is touched: a stick that appears "
+                                   "where the left thumb lands, the face buttons on the right, L and R at the top "
+                                   "corners. A drag on the free right half turns the camera. It hides again when a "
+                                   "gamepad or the keyboard is used.");
+        if (toggle_row("On-screen controls", s.touch_controls, o)) {
+            s.touch_controls = !s.touch_controls;
+            settings::save();
+        }
+        const auto off = [&](RowOptions options) {
+            if (!s.touch_controls && !options.disabled) {
+                options.disabled = true;
+                options.note = "On-screen controls are off";
+            }
+            return options;
+        };
+        if (toggle_row("D-pad", s.touch_dpad,
+                       off(options_for("input.touch_dpad", "A D-pad at the left edge, for the game's menus and its "
+                                                           "D-pad controls. Off gives its place to the stick.")))) {
+            s.touch_dpad = !s.touch_dpad;
+            settings::save();
+        }
+        int opacity = static_cast<int>(std::lround(s.touch_opacity * 100.0f));
+        if (slider_row("Controls opacity", opacity, 10, 100, 5, "%d%%",
+                       off(options_for("input.touch_opacity", "How strongly the on-screen controls are drawn.")))) {
+            s.touch_opacity = static_cast<float>(opacity) / 100.0f;
+            settings::save();
+        }
+        int size = static_cast<int>(std::lround(s.touch_size * 100.0f));
+        if (slider_row("Controls size", size, 60, 160, 5, "%d%%",
+                       off(options_for("input.touch_size", "The size of the on-screen controls.")))) {
+            s.touch_size = static_cast<float>(size) / 100.0f;
+            settings::save();
+        }
+        int speed = static_cast<int>(std::lround(s.touch_camera_speed));
+        if (slider_row("Touch camera speed", speed, 30, 720, 10, "%d deg",
+                       off(options_for("input.touch_camera_speed",
+                                       "Degrees the camera turns for a drag across the height of the screen.")))) {
+            s.touch_camera_speed = static_cast<float>(speed);
+            settings::save();
+        }
+    }
 
     ImGui::Dummy({0.0f, font_gap()});
     if (button_row("Restore control defaults",
@@ -1134,58 +1193,6 @@ void Menu::controls() {
         restore("input.tilt_level_limit", s.tilt_level_limit, d.tilt_level_limit);
         restore("input.jump_button", s.jump_button, d.jump_button);
         s.bindings = d.bindings;
-        settings::save();
-    }
-
-    section("Touch screen");
-    {
-        RowOptions o = options_for("input.touch_controls",
-                                   "A pad drawn over the game once the screen is touched: a stick that appears "
-                                   "where the left thumb lands, the face buttons on the right, L and R at the top "
-                                   "corners. A drag on the free right half turns the camera. It hides again when a "
-                                   "gamepad or the keyboard is used.");
-        if (toggle_row("On-screen controls", s.touch_controls, o)) {
-            s.touch_controls = !s.touch_controls;
-            settings::save();
-        }
-        const auto off = [&](RowOptions options) {
-            if (!s.touch_controls && !options.disabled) {
-                options.disabled = true;
-                options.note = "On-screen controls are off";
-            }
-            return options;
-        };
-        if (toggle_row("D-pad", s.touch_dpad,
-                       off(options_for("input.touch_dpad", "A D-pad at the left edge, for the game's menus, the item "
-                                                           "box and the camera's D-pad controls. Off gives its place "
-                                                           "to the stick.")))) {
-            s.touch_dpad = !s.touch_dpad;
-            settings::save();
-        }
-        int opacity = static_cast<int>(std::lround(s.touch_opacity * 100.0f));
-        if (slider_row("Controls opacity", opacity, 10, 100, 5, "%d%%",
-                       off(options_for("input.touch_opacity", "How strongly the on-screen controls are drawn.")))) {
-            s.touch_opacity = static_cast<float>(opacity) / 100.0f;
-            settings::save();
-        }
-        int size = static_cast<int>(std::lround(s.touch_size * 100.0f));
-        if (slider_row("Controls size", size, 60, 160, 5, "%d%%",
-                       off(options_for("input.touch_size", "The size of the on-screen controls.")))) {
-            s.touch_size = static_cast<float>(size) / 100.0f;
-            settings::save();
-        }
-        int speed = static_cast<int>(std::lround(s.touch_camera_speed));
-        if (slider_row("Touch camera speed", speed, 30, 720, 10, "%d deg",
-                       off(options_for("input.touch_camera_speed",
-                                       "Degrees the camera turns for a drag across the height of the screen.")))) {
-            s.touch_camera_speed = static_cast<float>(speed);
-            settings::save();
-        }
-    }
-    if (button_row("Use the classic keyboard layout",
-                   {false, {}, "The keys of earlier versions, for play without a mouse: I J K L move, Z X A S are "
-                               "the face buttons, Q and W are L and R."})) {
-        s.bindings = input::classic_bindings();
         settings::save();
     }
 }
@@ -1459,7 +1466,7 @@ void Menu::network() {
     if (!saved_log_path().empty()) info_row("Saved", saved_log_path());
     if (button_row("Reconnect now", {d.state == adhoc::ServerState::Off, {},
                                      "Drop the server connection and connect again at once. The group is joined "
-                                     "again; a quest in progress may end, as when a connection drops."}))
+                                     "again; the session in progress may end, as when a connection drops."}))
         client.reconnect_now();
     if (button_row("Disconnect", {!d.group && !d.joining, {},
                                   "Leave the group as if the other players were lost. The game shows its own "
@@ -1468,7 +1475,8 @@ void Menu::network() {
         client.disconnect_now();
 
     ImGui::Dummy({0.0f, font_gap()});
-    if (button_row("Restore network defaults", {false, {}, "Ad hoc play off and no server. Your address stays."})) {
+    if (button_row("Restore network defaults",
+                   {false, {}, "Ad hoc play off, no server and no nickname. Your address stays."})) {
         const settings::Settings &defaults = settings::defaults();
         const auto restore = [&](const char *key, auto &value, const auto &fallback) {
             if (settings::overridden_by(key).empty()) value = fallback;
@@ -1498,7 +1506,6 @@ void Menu::system() {
     }
     section("Game");
     if (button_row("Resume", {false, {}, "Back to the game."})) close_ = true;
-    settings::Settings &s = settings::current();
 #if defined(PORTABLEKIT_ANDROID_APP)
     // An Android app's data folder is out of the file manager's reach; its
     // log goes where the player picks instead, to send with a report.
