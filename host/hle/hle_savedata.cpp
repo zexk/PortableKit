@@ -250,7 +250,7 @@ std::uint32_t do_load(psprecomp::GuestMemory &memory, std::uint32_t params, cons
     write_cstring(memory, params + param::kDetail, loaded.contents.detail, 1024u);
     std::cerr << "[savedata] loaded " << count << " bytes from "
               << savedata::save_folder(state().memory_stick, files).string()
-              << (files.key ? " (decrypted)" : "") << "\n";
+              << (files.key ? " (decrypted)" : "") << (loaded.reason.empty() ? "" : ": " + loaded.reason) << "\n";
     // Encrypted files written by earlier builds are padded with zeros to a
     // multiple of 16 bytes, so a buffer the size the game saved leaves up to
     // 15 zero bytes behind. Only data that does not fit is worth saying.

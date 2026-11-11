@@ -2,7 +2,10 @@
 
 // Saves on the host, laid out as on a PSP memory stick:
 //   <ms0>/PSP/SAVEDATA/<gameName><saveName>/PARAM.SFO, ICON0.PNG, ..., <fileName>
-// so a folder can be copied to or from a real memory stick unchanged.
+// so a folder can be copied to or from a real memory stick unchanged. The
+// save a folder held before its last write is kept outside it, in
+// <ms0>/PSP/SAVEDATA/.previous/<gameName><saveName>/, for load_save to fall
+// back on when that write was cut short.
 #include "save_data/aes128.hpp"
 
 #include <cstdint>
@@ -37,7 +40,7 @@ enum class LoadStatus { Ok, NoData, Broken };
 struct LoadResult {
     LoadStatus status{LoadStatus::NoData};
     SaveContents contents;
-    std::string reason;  // why a save is broken, for the log
+    std::string reason;  // why a save is broken, or why the one before it was loaded; for the log
 };
 
 // PSP/SAVEDATA under the memory stick root.

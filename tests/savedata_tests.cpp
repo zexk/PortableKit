@@ -150,18 +150,37 @@ void test_store() {
     // A changed data file must be reported as broken. Flip the byte: the
     // encrypted data is different every run, so writing a fixed value can
     // leave it unchanged.
-    {
+    const auto break_data = [&] {
         std::fstream data(folder / "DATA.BIN", std::ios::binary | std::ios::in | std::ios::out);
         data.seekg(100);
         const int original = data.get();
         data.seekp(100);
         data.put(static_cast<char>(original ^ 0xFF));
-    }
+    };
+    break_data();
     check(load_save(root, files).status == LoadStatus::Broken, "a modified data file is rejected");
+
+    // A save cut short, as a crash between its files leaves it, falls back
+    // on the one before it; a broken one is never kept to fall back on.
+    const auto kept = root / "PSP" / "SAVEDATA" / ".previous" / "TEST00000SLOT";
+    check(write_save(root, files, contents, error) && !std::filesystem::exists(kept / "DATA.BIN"),
+          "a broken save is not kept");
+    SaveContents newer = contents;
+    newer.data.assign(4096u, 0x43u);
+    check(write_save(root, files, newer, error) && std::filesystem::exists(kept / "DATA.BIN") &&
+              std::filesystem::exists(kept / "PARAM.SFO") && !std::filesystem::exists(folder / "DATA.BIN.tmp"),
+          "the save a write replaces is kept outside its folder");
+    check(load_save(root, files).contents.data == newer.data, "the newest save loads while it is whole");
+    break_data();
+    const auto fallback = load_save(root, files);
+    check(fallback.status == LoadStatus::Ok && fallback.contents.data == contents.data && !fallback.reason.empty(),
+          "a broken save falls back on the one before it");
+
     SaveFiles missing = files;
     missing.save_name = "OTHER";
     check(load_save(root, missing).status == LoadStatus::NoData, "a missing save reports no data");
-    check(delete_save(root, files) && !std::filesystem::exists(folder), "a save is deleted");
+    check(delete_save(root, files) && !std::filesystem::exists(folder) && !std::filesystem::exists(kept),
+          "a save is deleted with the one kept before it");
     std::filesystem::remove_all(root);
 }
 

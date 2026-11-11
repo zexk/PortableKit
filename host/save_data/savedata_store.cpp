@@ -6,9 +6,17 @@
 
 #include <algorithm>
 #include <chrono>
+#include <cstdio>
 #include <cstring>
 #include <fstream>
+#include <iostream>
 #include <random>
+
+#if defined(_WIN32)
+#include <io.h>
+#else
+#include <unistd.h>
+#endif
 
 namespace portablekit::savedata {
 namespace {
@@ -30,15 +38,25 @@ std::optional<std::vector<std::uint8_t>> read_file(const std::filesystem::path &
 }
 
 bool write_file(const std::filesystem::path &path, const std::vector<std::uint8_t> &bytes) {
-    // Write beside the target and rename, so an interrupted save never leaves
-    // a half-written file in place of a good one.
-    const std::filesystem::path temporary = path.string() + ".tmp";
-    {
-        std::ofstream out(temporary, std::ios::binary | std::ios::trunc);
-        if (!out) return false;
-        out.write(reinterpret_cast<const char *>(bytes.data()), static_cast<std::streamsize>(bytes.size()));
-        if (!out) return false;
-    }
+    // Write beside the target, put it on the disk and rename it over the
+    // target, so neither an interrupted save nor a machine that goes down
+    // soon after leaves a half-written or empty file in place of a good one.
+    std::filesystem::path temporary = path;
+    temporary += ".tmp";
+#if defined(_WIN32)
+    std::FILE *out = _wfopen(temporary.c_str(), L"wb");
+#else
+    std::FILE *out = std::fopen(temporary.c_str(), "wb");
+#endif
+    if (out == nullptr) return false;
+    bool written = std::fwrite(bytes.data(), 1u, bytes.size(), out) == bytes.size() && std::fflush(out) == 0;
+#if defined(_WIN32)
+    written = written && _commit(_fileno(out)) == 0;
+#else
+    written = written && fsync(fileno(out)) == 0;
+#endif
+    written = std::fclose(out) == 0 && written;
+    if (!written) return false;
     std::error_code ec;
     std::filesystem::rename(temporary, path, ec);
     return !ec;
@@ -84,10 +102,17 @@ bool save_exists(const std::filesystem::path &memory_stick, const SaveFiles &fil
     return std::filesystem::is_directory(folder, ec) && std::filesystem::is_regular_file(folder / kParamSfo, ec);
 }
 
-LoadResult load_save(const std::filesystem::path &memory_stick, const SaveFiles &files) {
+namespace {
+
+// Where write_save keeps the save a folder held before its last write:
+// beside the save folders, so a folder stays exactly as a PSP has it.
+std::filesystem::path previous_folder(const std::filesystem::path &memory_stick, const SaveFiles &files) {
+    return savedata_root(memory_stick) / ".previous" / (files.game_name + files.save_name);
+}
+
+// The save in one folder: its PARAM.SFO and data file, checked against each other.
+LoadResult load_folder(const std::filesystem::path &folder, const SaveFiles &files) {
     LoadResult result;
-    const auto folder = save_folder(memory_stick, files);
-    if (!save_exists(memory_stick, files)) return result;
     const auto sfo_bytes = read_file(folder / kParamSfo);
     const auto sfo = sfo_bytes ? ParamSfo::parse(*sfo_bytes) : std::nullopt;
     const auto file = read_file(folder / files.file_name);
@@ -137,6 +162,20 @@ LoadResult load_save(const std::filesystem::path &memory_stick, const SaveFiles 
     return result;
 }
 
+} // namespace
+
+LoadResult load_save(const std::filesystem::path &memory_stick, const SaveFiles &files) {
+    if (!save_exists(memory_stick, files)) return {};
+    LoadResult result = load_folder(save_folder(memory_stick, files), files);
+    if (result.status != LoadStatus::Broken) return result;
+    // A save cut short, between its files or by a machine that went down
+    // before they reached the disk: the one before it, which write_save kept.
+    LoadResult kept = load_folder(previous_folder(memory_stick, files), files);
+    if (kept.status != LoadStatus::Ok) return result;
+    kept.reason = result.reason + "; loaded the save before it instead";
+    return kept;
+}
+
 bool write_save(const std::filesystem::path &memory_stick, const SaveFiles &files, const SaveContents &contents,
                 std::string &error) {
     const auto folder = save_folder(memory_stick, files);
@@ -145,6 +184,19 @@ bool write_save(const std::filesystem::path &memory_stick, const SaveFiles &file
     if (ec) {
         error = "cannot create " + folder.string() + ": " + ec.message();
         return false;
+    }
+
+    // The save this one replaces, if it loads, is kept for load_save to
+    // fall back on; one that does not leaves the last good one in place.
+    if (load_folder(folder, files).status == LoadStatus::Ok) {
+        const auto kept = previous_folder(memory_stick, files);
+        std::filesystem::create_directories(kept, ec);
+        for (const std::string &name : {std::string(kParamSfo), files.file_name}) {
+            const auto bytes = read_file(folder / name);
+            if (!ec && bytes && write_file(kept / name, *bytes)) continue;
+            std::cerr << "[savedata] cannot keep the previous save in " << kept.string() << "\n";
+            break;
+        }
     }
 
     // Keep what an existing PARAM.SFO lists for other files.
@@ -221,6 +273,8 @@ bool write_save(const std::filesystem::path &memory_stick, const SaveFiles &file
 
 bool delete_save(const std::filesystem::path &memory_stick, const SaveFiles &files) {
     std::error_code ec;
+    // The kept one goes too: a later save there must not fall back on it.
+    std::filesystem::remove_all(previous_folder(memory_stick, files), ec);
     const auto removed = std::filesystem::remove_all(save_folder(memory_stick, files), ec);
     return !ec && removed > 0u;
 }
