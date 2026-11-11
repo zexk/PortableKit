@@ -218,6 +218,9 @@ struct GameProfile {
     // agree on it, so it is the original release's code even when the port's
     // disc id is a different one.
     const char *adhoc_product_code;
+    // Whether the menu has its Network tab (hosting, joining and the ad hoc
+    // diagnostics). A port whose ad hoc play is not checked yet leaves it out.
+    bool adhoc_menu = true;
 
     // --- Infrastructure (internet) play -------------------------------------
     // The original servers of most PSP games are gone, and a community server

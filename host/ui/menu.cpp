@@ -148,8 +148,20 @@ bool Menu::frame() {
     back_ = back || pad_back;
 
     begin_panel("##menu", portablekit::game().project_name, paused_ ? "Paused" : "Running", true);
+    // tab_ names a tab by its place in kTabs, whichever tabs the game shows.
     static const char *const kTabs[] = {"Video", "Audio", "Controls", "Game", "Network", "System"};
-    const bool switched = tab_bar(kTabs, 6, tab_) || first_frame_;
+    const char *labels[6];
+    int shown_tabs[6];
+    int count = 0;
+    for (int i = 0; i < 6; ++i) {
+        if (i == 4 && !portablekit::game().adhoc_menu) continue;
+        labels[count] = kTabs[i];
+        shown_tabs[count++] = i;
+    }
+    int shown = static_cast<int>(std::find(shown_tabs, shown_tabs + count, tab_) - shown_tabs);
+    if (shown == count) shown = 0;
+    const bool switched = tab_bar(labels, count, shown) || first_frame_;
+    tab_ = shown_tabs[shown];
     first_frame_ = false;
     begin_content();
     if (switched) {
