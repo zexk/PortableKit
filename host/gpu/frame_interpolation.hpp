@@ -94,6 +94,8 @@ struct Matching {
     float camera_angle_degrees{};
     float camera_distance{};
     Matrix camera{};
+    // The share of the sampled pairs that moved as the camera did.
+    float agreeing_fraction{};
     // The reason the two frames must not be blended, or null.
     const char *cut{};
     // Blended only because the motion continues the previous pair's: past
@@ -107,6 +109,16 @@ struct Matching {
 // through GameProfile::interpolation_thresholds.
 struct CutThresholds {
     float min_matched_fraction{0.5f};   // of the eligible draws of the frame with fewer
+    // Fewer pairs than `min_matched_fraction` are still one scene when at
+    // least `min_agreeing_matched_fraction` matched and `min_agreeing_fraction`
+    // of the sampled pairs moved as the camera did, to within the two
+    // tolerances: a room full of gas draws half the frame from new vertices,
+    // while the scenery behind it stands still. A `min_agreeing_fraction`
+    // above 1 (<prefix>_INTERPOLATION_NO_AGREEMENT) leaves the plain limit.
+    float min_agreeing_matched_fraction{0.1f};
+    float min_agreeing_fraction{0.5f};
+    float agreeing_angle_degrees{0.25f};
+    float agreeing_distance{8.0f};
     float max_camera_angle_degrees{30.0f};
     float max_camera_distance{200.0f};  // world units the camera moves in one frame
     // Motion that continues the previous pair's is not a cut even past the

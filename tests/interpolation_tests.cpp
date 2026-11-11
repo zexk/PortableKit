@@ -256,9 +256,25 @@ void matching() {
 
     std::vector<DrawSummary> other = scene(100u);
     for (std::size_t i = 0; i < 60u; ++i) other[i].vertex_address += 0x00100000u;
+    // Smoke: most of the frame is drawn from new vertices, the rest stands.
+    const Matching &smoke = matcher.match(scene(100u), other, thresholds);
+    check(smoke.matched == 40u && near(smoke.agreeing_fraction, 1.0f) && smoke.cut == nullptr,
+          "a frame with most draws new is no cut while the rest moved as one scene");
+    CutThresholds plain = thresholds;
+    plain.min_agreeing_fraction = 2.0f;
+    const Matching &plain_smoke = matcher.match(scene(100u), other, plain);
+    check(plain_smoke.cut != nullptr && std::strcmp(plain_smoke.cut, "few draws match") == 0,
+          "with the agreement off, a frame with most draws new is a cut");
+    // Another scene: what still matches is somewhere else, each on its own.
+    for (std::size_t i = 60u; i < 100u; ++i) other[i].world[12] += static_cast<float>(i) * 7.0f;
     const Matching &replaced = matcher.match(scene(100u), other, thresholds);
-    check(replaced.matched == 40u && replaced.cut != nullptr && std::strcmp(replaced.cut, "few draws match") == 0,
-          "a frame with most draws new is a cut");
+    check(replaced.cut != nullptr && std::strcmp(replaced.cut, "few draws match") == 0,
+          "a frame with most draws new and the rest moved apart is a cut");
+    std::vector<DrawSummary> few = scene(100u);
+    for (std::size_t i = 8u; i < 100u; ++i) few[i].vertex_address += 0x00100000u;
+    const Matching &remnant = matcher.match(scene(100u), few, thresholds);
+    check(remnant.matched == 8u && remnant.cut != nullptr && std::strcmp(remnant.cut, "few draws match") == 0,
+          "under a tenth of the draws is a cut however they moved");
 
     Matcher turning_matcher;
     const Matching &revealed = turning_matcher.match(scene(100u), scene(220u), thresholds);

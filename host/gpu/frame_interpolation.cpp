@@ -164,6 +164,19 @@ const Matching &Matcher::match(const std::vector<DrawSummary> &older, const std:
         out.camera = middle->motion;
         out.camera_distance = std::sqrt(out.camera[12] * out.camera[12] + out.camera[13] * out.camera[13] +
                                         out.camera[14] * out.camera[14]);
+        // Scenery that stands still moves exactly as the camera did, so the
+        // share of the sample that did says how much of one scene the pairs
+        // are, whatever else the frames draw.
+        std::size_t agreeing = 0u;
+        for (const Sample &sample : samples) {
+            const float dx = sample.motion[12] - out.camera[12];
+            const float dy = sample.motion[13] - out.camera[13];
+            const float dz = sample.motion[14] - out.camera[14];
+            if (rotation_angle_degrees(out.camera, sample.motion) <= thresholds.agreeing_angle_degrees &&
+                dx * dx + dy * dy + dz * dz <= thresholds.agreeing_distance * thresholds.agreeing_distance)
+                ++agreeing;
+        }
+        out.agreeing_fraction = static_cast<float>(agreeing) / static_cast<float>(samples.size());
     }
 
     // Instances of one mesh were paired in drawing order, which the game
@@ -281,11 +294,15 @@ const Matching &Matcher::match(const std::vector<DrawSummary> &older, const std:
     }
     if (out.eligible_newer == 0u || out.matched == 0u) {
         out.cut = "nothing to blend";
-    } else if (static_cast<float>(out.matched) <
-               thresholds.min_matched_fraction * static_cast<float>(std::min(out.eligible_newer, out.eligible_older))) {
+    } else if (const float smaller = static_cast<float>(std::min(out.eligible_newer, out.eligible_older));
+               static_cast<float>(out.matched) < thresholds.min_matched_fraction * smaller &&
+               (static_cast<float>(out.matched) < thresholds.min_agreeing_matched_fraction * smaller ||
+                out.agreeing_fraction < thresholds.min_agreeing_fraction)) {
         // Against the smaller frame: a turn that brings a block of scenery
         // into view (or takes one out) doubles one side's draws in a single
-        // frame, while a new scene matches little of either.
+        // frame, while a new scene matches little of either. Effects drawn
+        // from new vertices every frame (hundreds of smoke quads) match
+        // nothing either, so fewer pairs are enough when they moved together.
         out.cut = "few draws match";
     } else if (out.camera_found && out.camera_angle_degrees > max_angle) {
         out.cut = "camera turned";
