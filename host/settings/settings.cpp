@@ -430,6 +430,7 @@ const std::vector<Field> &fields() {
          [](Settings &s, const std::string &t) { return parse_bool(t, s.menu_pause_multiplayer); },
          [](const Settings &s) { return std::string(s.menu_pause_multiplayer ? "1" : "0"); },
          [](Settings &s, const char *t) { s.menu_pause_multiplayer = variable_flag(t); }},
+        BOOL_FIELD("ui.menu_on_focus_loss", menu_on_focus_loss),
         {"network.recent", nullptr,
          [](Settings &s, const std::string &t) {
              s.adhoc_recent.clear();

@@ -229,6 +229,10 @@ bool Layer::handle_event(const SDL_Event &event) {
     case SDL_EVENT_WINDOW_CLOSE_REQUESTED:
         window_closed_ = true;
         break;
+    case SDL_EVENT_WINDOW_FOCUS_LOST:
+        // Game > Menu: another window took the focus while the game ran.
+        if (!interactive_ && settings::current().menu_on_focus_loss) menu_toggle_ = true;
+        break;
     case SDL_EVENT_KEY_DOWN:
     case SDL_EVENT_KEY_UP:
         // Android's Back is Esc: it opens and closes the menu.

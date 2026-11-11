@@ -569,6 +569,13 @@ void Menu::gameplay() {
         s.menu_pause_multiplayer = !s.menu_pause_multiplayer;
         settings::save();
     }
+    if (toggle_row("Open the menu when switching away", s.menu_on_focus_loss,
+                   options_for("ui.menu_on_focus_loss",
+                               "Opens this menu when another window takes the focus, so the game waits for you "
+                               "as the pause settings above say."))) {
+        s.menu_on_focus_loss = !s.menu_on_focus_loss;
+        settings::save();
+    }
     ImGui::Dummy({0.0f, font_gap()});
     if (button_row("Restore game defaults", {false, {}, std::string("Every setting on this page back to how ") + portablekit::game().project_name + " ships."})) {
         const settings::Settings &d = settings::defaults();
@@ -581,6 +588,7 @@ void Menu::gameplay() {
         restore("video.pace_at_pad_read", s.pace_at_pad_read, d.pace_at_pad_read);
         restore("ui.menu_pause", s.menu_pause, d.menu_pause);
         restore("ui.menu_pause_multiplayer", s.menu_pause_multiplayer, d.menu_pause_multiplayer);
+        restore("ui.menu_on_focus_loss", s.menu_on_focus_loss, d.menu_on_focus_loss);
         if (portablekit::game().reset_game_settings) portablekit::game().reset_game_settings();
         settings::save();
     }

@@ -151,6 +151,7 @@ struct Settings {
     // Interface
     bool menu_pause{true};             // opening the menu pauses the game
     bool menu_pause_multiplayer{};     // ...also during ad hoc play, where a paused game stops answering its peers
+    bool menu_on_focus_loss{};         // another window taking the focus opens the menu
     bool menu_hint_seen{};             // the "Esc / L3+R3 opens the menu" hint was shown
     std::string last_folder;           // where the setup's file browser was last used
 
