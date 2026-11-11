@@ -27,6 +27,9 @@ class Runtime;
 namespace portablekit {
 
 class HleRegistrar;
+namespace settings {
+struct Settings;
+}
 namespace gpu::interpolation {
 struct CutThresholds;
 }
@@ -246,6 +249,12 @@ struct GameProfile {
     // changes what it needs. Only what settings.ini does not hold is taken
     // from here, so a player's own bindings stay. Null: the framework's.
     void (*keyboard_defaults)(input::Bindings &bindings, bool &mouse) = nullptr;
+    // The game's own defaults for the rest of the player's settings: gets the
+    // framework's and changes what it needs (a better-looking picture, say).
+    // Applied before the platform's own, so a phone still gets Fill and
+    // fullscreen; settings.ini and the environment still win. Null: the
+    // framework's.
+    void (*settings_defaults)(settings::Settings &values) = nullptr;
 
     // --- Hooks -------------------------------------------------------------
     // Called after the framework has registered its own HLE, so a game can add

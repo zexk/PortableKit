@@ -564,6 +564,7 @@ Settings defaults_for(Platform platform) {
     values.confirm_south = game().confirm_button == 1u;
     // The game's keyboard first; a phone then turns the mouse off either way.
     if (const auto keyboard = game().keyboard_defaults) keyboard(values.bindings, values.mouse);
+    if (const auto apply = game().settings_defaults) apply(values);
     if (platform == Platform::Android) {
         values.aspect = Aspect::Fill;
         values.fullscreen = true;
