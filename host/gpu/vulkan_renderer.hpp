@@ -181,9 +181,13 @@ public:
     // Writes the last rendered frame as a BMP; returns false if it could not be
     // read back. Used for screenshots without touching the window system.
     bool capture_frame(const std::string &path);
-    // Writes the next presented window image, with the interface over it, as
-    // a BMP once it has been drawn.
+    // Writes the next presented window image, with the interface over it,
+    // once it has been drawn: a PNG for a .png path, encoded on a thread of
+    // its own, otherwise a BMP.
     void capture_window(const std::string &path);
+    // Once the last PNG capture is written (or could not be), a line saying
+    // so for the player, given once; otherwise empty.
+    [[nodiscard]] std::string take_screenshot_note();
 
     // Display settings, applied at once. The initial values come from
     // settings::current() in initialize(). A scale of 0 follows the window's

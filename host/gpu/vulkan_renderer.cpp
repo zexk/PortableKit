@@ -18,6 +18,7 @@
 #include "perf/perf_overlay.hpp"
 #include "input/bindings.hpp"
 #include "input/motion.hpp"
+#include "save_data/save_transfer.hpp"
 #include "settings/settings.hpp"
 
 #if defined(PORTABLEKIT_ANDROID_APP)
@@ -1022,9 +1023,11 @@ struct VulkanRenderer::Impl {
     VkBuffer capture_buffer{};
     VkDeviceMemory capture_memory{};
     VkExtent2D capture_extent{};
-    // The PNG being encoded from the last capture; waited for before the
-    // next one is started, and when the renderer goes.
-    std::future<void> capture_writer;
+    // The PNG being encoded from the last capture, and its path; waited for
+    // before the next one is started, and when the renderer goes. True once
+    // written (take_screenshot_note).
+    std::future<bool> capture_writer;
+    std::string capture_written;
     bool capture_recorded{};
 
     // Performance overlay: drawn on the CPU, copied through a mapped staging
@@ -3796,8 +3799,11 @@ void VulkanRenderer::Impl::write_capture(VkFence fence) {
         // for a 1080p frame of a game), which held the game still: it runs
         // on a thread of its own, from a copy of the pixels.
         std::vector<std::uint8_t> copy(pixels, pixels + std::size_t(width) * height * 4u);
+        capture_written = capture_path;
         capture_writer = std::async(std::launch::async, [=, copy = std::move(copy), path = capture_path] {
-            report(write_png(install::path_from_utf8(path), copy, width, height, bgra, true), path, width, height);
+            const bool written = write_png(install::path_from_utf8(path), copy, width, height, bgra, true);
+            report(written, path, width, height);
+            return written;
         });
     } else {
         report(mapped_ok && write_bmp(capture_path, pixels, width, height, bgra), capture_path, width, height);
@@ -5385,13 +5391,15 @@ bool VulkanRenderer::pump_events() {
         if (event.type == SDL_EVENT_KEY_DOWN && event.key.key == SDLK_F12 && !event.key.repeat &&
             impl_->capture_path.empty()) {
             try {
-                const auto folder = install::user_data_directory() / "screenshots";
+                const auto folder = install::user_data_directory() / install::kScreenshotFolder;
                 std::filesystem::create_directories(folder);
-                const auto stamp = std::chrono::duration_cast<std::chrono::microseconds>(
-                    std::chrono::system_clock::now().time_since_epoch()).count();
-                auto path = folder / ("screenshot-" + std::to_string(stamp) + ".png");
-                for (unsigned suffix = 1; std::filesystem::exists(path); ++suffix)
-                    path = folder / ("screenshot-" + std::to_string(stamp) + "-" + std::to_string(suffix) + ".png");
+                // Named by the local time to the second; the last one may
+                // still be encoding, and not on disk yet.
+                const std::string stamp = savedata::timestamp_for_path(std::chrono::system_clock::now());
+                auto path = folder / ("screenshot-" + stamp + ".png");
+                for (unsigned suffix = 1;
+                     std::filesystem::exists(path) || path == install::path_from_utf8(impl_->capture_written); ++suffix)
+                    path = folder / ("screenshot-" + stamp + "-" + std::to_string(suffix) + ".png");
                 capture_window(install::path_to_utf8(path));
             } catch (const std::exception &e) {
                 std::cerr << "[render] cannot save screenshot: " << e.what() << std::endl;
@@ -5886,6 +5894,14 @@ void VulkanRenderer::capture_window(const std::string &path) {
         return;
     }
     impl_->capture_path = path;
+}
+
+std::string VulkanRenderer::take_screenshot_note() {
+    if (!impl_ || !impl_->capture_writer.valid() ||
+        impl_->capture_writer.wait_for(std::chrono::seconds(0)) != std::future_status::ready)
+        return {};
+    const std::string name = install::path_to_utf8(install::path_from_utf8(impl_->capture_written).filename());
+    return impl_->capture_writer.get() ? "Screenshot saved: " + name : "Cannot save the screenshot " + name;
 }
 
 bool VulkanRenderer::initialize_ui(std::string &error) {

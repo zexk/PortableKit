@@ -1527,6 +1527,8 @@ void Menu::system() {
 #else
     if (button_row("Open the data folder", {false, {}, std::string("Show ") + portablekit::game().project_name + "'s data folder in the file manager."}))
         open_folder(install::path_from_utf8(data_dir));
+    if (button_row("Open the screenshots folder", {false, {}, "Where F12 saves pictures of the window."}))
+        open_folder(install::path_from_utf8(data_dir) / install::kScreenshotFolder);
 #endif
     if (button_row("Set up game data again…",
                    {false, {}, "Choose the disc image again, for example after moving it. The game closes first."}))
@@ -1598,22 +1600,35 @@ double hint_seconds_left() {
     return kHintSeconds - std::chrono::duration<double>(Clock::now() - first_frame).count();
 }
 
-// The hint shown over the game until the menu has been opened once.
-void draw_hint(double seconds_left) {
-    Layer &layer = Layer::get();
+// A box over the game, centred at the top or the bottom, fading out over its
+// last second.
+void begin_banner(const char *id, double seconds_left, bool top) {
     const ImGuiIO &io = ImGui::GetIO();
-    const float font = layer.font_size();
-    const float alpha = static_cast<float>(std::clamp(seconds_left, 0.0, 1.0));
-    ImGui::PushStyleVar(ImGuiStyleVar_Alpha, alpha);
+    const float font = Layer::get().font_size();
+    ImGui::PushStyleVar(ImGuiStyleVar_Alpha, static_cast<float>(std::clamp(seconds_left, 0.0, 1.0)));
     ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, {font * 0.8f, font * 0.5f});
-    ImGui::SetNextWindowPos({io.DisplaySize.x * 0.5f, io.DisplaySize.y - font}, ImGuiCond_Always, {0.5f, 1.0f});
-    ImGui::Begin("##hint", nullptr,
+    ImGui::SetNextWindowPos({io.DisplaySize.x * 0.5f, top ? font : io.DisplaySize.y - font}, ImGuiCond_Always,
+                            {0.5f, top ? 0.0f : 1.0f});
+    ImGui::Begin(id, nullptr,
                  ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoInputs | ImGuiWindowFlags_AlwaysAutoResize |
                      ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoFocusOnAppearing | ImGuiWindowFlags_NoNav);
-    hints({{Control::Menu, "Settings and pause"}});
+}
+
+void end_banner() {
     ImGui::End();
     ImGui::PopStyleVar(2);
 }
+
+// The hint shown over the game until the menu has been opened once.
+void draw_hint(double seconds_left) {
+    begin_banner("##hint", seconds_left, false);
+    hints({{Control::Menu, "Settings and pause"}});
+    end_banner();
+}
+
+// A line shown over the game for a few seconds: where a screenshot went.
+std::string g_notice;
+Clock::time_point g_notice_until{};
 
 // The network overlay: a few lines in the top-right corner.
 void draw_network_overlay() {
@@ -1709,13 +1724,23 @@ void draw_over_game() {
         return;
     }
     const double hint_left = menu || settings::current().menu_hint_seen ? -1.0 : hint_seconds_left();
+    if (std::string note = layer.renderer().take_screenshot_note(); !note.empty()) {
+        g_notice = std::move(note);
+        g_notice_until = Clock::now() + std::chrono::seconds(3);
+    }
+    const double notice_left = std::chrono::duration<double>(g_notice_until - Clock::now()).count();
     const bool overlay = network_overlay();
     const bool touch = !menu && layer.renderer().touch_controls_visible();
     const bool status = g_status_overlay_visible != nullptr && g_status_overlay_visible();
-    if (hint_left <= 0.0 && !overlay && !menu && !touch && !status) return;
+    if (hint_left <= 0.0 && notice_left <= 0.0 && !overlay && !menu && !touch && !status) return;
     layer.begin_frame();
     if (touch) draw_touch_controls(layer.renderer().touch_controls(), settings::current().touch_opacity);
     if (hint_left > 0.0) draw_hint(hint_left);
+    if (notice_left > 0.0) {
+        begin_banner("##notice", notice_left, true);
+        ImGui::TextUnformatted(g_notice.c_str());
+        end_banner();
+    }
     if (overlay) draw_network_overlay();
     if (status) g_status_overlay_draw();
     if (menu && !menu->frame()) {

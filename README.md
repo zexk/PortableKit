@@ -10,9 +10,10 @@ The game's Allegrex (MIPS) code is translated to C++ ahead of time and compiled 
 
 **F11** switches between full screen and a window, as Video > Display does.
 **F12** saves a PNG of the presented window, including the interface, at its
-full resolution in `screenshots/` under the game's data folder. Filenames are
-unique; a held key takes one screenshot. Scripted `.bmp` captures keep their
-existing format.
+full resolution in `screenshots/` under the game's data folder, named by the
+date and time, and says so at the top of the screen once it is written.
+System > Open the screenshots folder shows them. A held key takes one
+screenshot. Scripted `.bmp` captures keep their existing format.
 
 ## Parts
 
