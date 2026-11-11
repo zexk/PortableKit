@@ -5373,6 +5373,15 @@ bool VulkanRenderer::pump_events() {
             impl_->mouse_buttons |= 1u << event.button.button;
         if (event.type == SDL_EVENT_MOUSE_BUTTON_UP && event.button.button < 32u)
             impl_->mouse_buttons &= ~(1u << event.button.button);
+#if !defined(__ANDROID__)
+        // F11: full screen or a window, the same as Video > Display.
+        if (event.type == SDL_EVENT_KEY_DOWN && event.key.key == SDLK_F11 && !event.key.repeat) {
+            settings::Settings &s = settings::current();
+            s.fullscreen = !s.fullscreen;
+            set_fullscreen(s.fullscreen);
+            settings::save();
+        }
+#endif
         if (event.type == SDL_EVENT_KEY_DOWN && event.key.key == SDLK_F12 && !event.key.repeat &&
             impl_->capture_path.empty()) {
             try {
