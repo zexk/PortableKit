@@ -300,6 +300,19 @@ void matching() {
               eligible.newer_of[2] == -1,
           "draws into other framebuffers and 2D draws are never matched");
 
+    // A menu: nothing in 3D in either frame.
+    std::vector<DrawSummary> menu{draw(1u, 0.0f)};
+    menu[0].perspective = false;
+    mark_eligible(menu, kShown);
+    CutThresholds sprites = thresholds;
+    sprites.through = true;
+    check(matcher.match(menu, menu, sprites).cut == nullptr, "with through-mode blending a pair without 3D is no cut");
+    sprites.through_alone = false;
+    const Matching &alone_off = matcher.match(menu, menu, sprites);
+    check(alone_off.cut != nullptr && std::strcmp(alone_off.cut, "nothing to blend") == 0 &&
+              matcher.match(menu, menu, thresholds).cut != nullptr,
+          "and a cut with that off, or without through-mode blending");
+
     std::vector<DrawSummary> flat{draw(1u, 0.0f)};
     flat[0].perspective = false;
     mark_eligible(flat, kShown);

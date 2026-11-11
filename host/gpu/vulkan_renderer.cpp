@@ -2170,6 +2170,7 @@ bool VulkanRenderer::initialize(const RendererConfig &config, std::string &error
     if (const interpolation::CutThresholds *thresholds = portablekit::game().interpolation_thresholds)
         impl.cut_thresholds = *thresholds;
     if (portablekit::env("INTERPOLATION_NO_THROUGH") != nullptr) impl.cut_thresholds.through = false;
+    if (portablekit::env("INTERPOLATION_NO_THROUGH_ALONE") != nullptr) impl.cut_thresholds.through_alone = false;
     pacing::set_game_frame_vblanks(static_cast<int>(portablekit::game().frame_vblanks));
     impl.present_clock = pacing::PresentClock{};
     impl.governor = pacing::RateGovernor{};
@@ -6043,6 +6044,9 @@ void VulkanRenderer::upload_frame(std::uint32_t display_address, const std::uint
     if (!impl.ready || pixels == nullptr || width == 0u || height == 0u || stride < width) return;
     if (!impl.recording) begin_frame();
     impl.frame_changed = true;
+    // A picture copied from memory (a movie) is not drawn, so the frame
+    // cannot be drawn again for a blend.
+    impl.recording_frame.recorded = false;
     impl.end_pass();
     std::string error;
     if (impl.upload_extent.width != width || impl.upload_extent.height != height) {
@@ -7470,6 +7474,17 @@ void VulkanRenderer::Impl::finish_interpolated_frame(VkImage source, std::uint32
         matching = interpolation::Matching{};
         matching.cut = older_frame.valid ? "not recorded" : "no frame before";
     }
+    // A pair with nothing in 3D is blended by its sprites alone, and a
+    // replay starts from black: only a frame that cleared its framebuffer
+    // before anything else is certain to have drawn all of its picture.
+    const auto cleared_first = [](const FrameRecord &frame) {
+        for (const interpolation::DrawSummary &draw : frame.summaries)
+            if (draw.target == frame.displayed) return !draw.through && !draw.transformed;
+        return false;
+    };
+    if (matching.cut == nullptr && matching.eligible_older == 0u && matching.eligible_newer == 0u &&
+        !(cleared_first(older_frame) && cleared_first(newer_frame)))
+        matching.cut = "not cleared";
     camera_motion = matching.camera_found ? interpolation::rigid_motion(matching.camera) : interpolation::RigidMotion{};
     camera_motion_back =
         camera_motion.valid ? interpolation::rigid_motion(camera_motion.inverse) : interpolation::RigidMotion{};

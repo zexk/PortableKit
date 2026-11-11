@@ -292,7 +292,9 @@ const Matching &Matcher::match(const std::vector<DrawSummary> &older, const std:
                                       thresholds.continuous_distance_margin,
                                   max_distance, std::max(max_distance, thresholds.max_continuous_distance));
     }
-    if (out.eligible_newer == 0u || out.matched == 0u) {
+    if (thresholds.through && thresholds.through_alone && out.eligible_newer == 0u && out.eligible_older == 0u) {
+        // Nothing in 3D in either frame: a menu, blended by its sprites alone.
+    } else if (out.eligible_newer == 0u || out.matched == 0u) {
         out.cut = "nothing to blend";
     } else if (const float smaller = static_cast<float>(std::min(out.eligible_newer, out.eligible_older));
                static_cast<float>(out.matched) < thresholds.min_matched_fraction * smaller &&
