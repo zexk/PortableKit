@@ -514,6 +514,9 @@ void present_clock() {
     leading.set_lead(0.0);
     check(leading.delay_us() == kGameFrameUs / 2 + 6000 && leading.blend_at(3 * kGameFrameUs) == 1.0f,
           "without a lead nothing changes");
+    leading.set_lead(1.0);
+    leading.set_presents_per_frame(1.0);
+    check(leading.lead_us() == 0, "at the game's own rate there is no lead left over");
 }
 
 Second second_with(double speed, double idle_ms, double blend_ms, double plain_ms, double rate) {

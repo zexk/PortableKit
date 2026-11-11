@@ -72,13 +72,12 @@ void PresentClock::apply_offsets() noexcept {
     // the smallest offset of a grid moment into its frame over them is the
     // first step.
     first_step_us_ = frame_us_;
-    reach_us_ = 0;
+    reach_us_ = lead_us_ = 0;
     if (per_frame_ <= 1.0) return;
     const double step = static_cast<double>(frame_us_) / per_frame_;
     const auto offset = [&](int index) { return static_cast<std::int64_t>(std::llround(index * step)) % frame_us_; };
     for (int index = 1; index <= 64; ++index)
         if (offset(index) > 0) first_step_us_ = std::min(first_step_us_, offset(index));
-    lead_us_ = 0;
     if (lead_ <= 0.0) return;
     // Grid moments less than this far into their frame are carried on; the
     // first one past it needs the next frame, and the delay is what that
