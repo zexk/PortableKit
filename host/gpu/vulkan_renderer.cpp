@@ -45,6 +45,7 @@
 #include <cstring>
 #include <filesystem>
 #include <fstream>
+#include <future>
 #include <iomanip>
 #include <iostream>
 #include <map>
@@ -1021,6 +1022,9 @@ struct VulkanRenderer::Impl {
     VkBuffer capture_buffer{};
     VkDeviceMemory capture_memory{};
     VkExtent2D capture_extent{};
+    // The PNG being encoded from the last capture; waited for before the
+    // next one is started, and when the renderer goes.
+    std::future<void> capture_writer;
     bool capture_recorded{};
 
     // Performance overlay: drawn on the CPU, copied through a mapped staging
@@ -3782,17 +3786,22 @@ void VulkanRenderer::Impl::write_capture(VkFence fence) {
     const bool mapped_ok = vkMapMemory(device, capture_memory, 0u, VK_WHOLE_SIZE, 0u, &mapped) == VK_SUCCESS;
     const bool bgra = swapchain_format == VK_FORMAT_B8G8R8A8_UNORM || swapchain_format == VK_FORMAT_B8G8R8A8_SRGB;
     const auto *pixels = static_cast<const std::uint8_t *>(mapped);
-    const bool png = std::filesystem::path(capture_path).extension() == ".png";
-    const bool written = mapped_ok && (png
-        ? write_png(install::path_from_utf8(capture_path),
-                    {pixels, std::size_t(capture_extent.width) * capture_extent.height * 4u},
-                    capture_extent.width, capture_extent.height, bgra, true)
-        : write_bmp(capture_path, pixels, capture_extent.width, capture_extent.height, bgra));
-    if (written)
-        std::cout << "[render] window " << capture_extent.width << "x" << capture_extent.height << " -> "
-                  << capture_path << std::endl;
-    else
-        std::cout << "[render] cannot write " << capture_path << std::endl;
+    const std::uint32_t width = capture_extent.width, height = capture_extent.height;
+    const auto report = [](bool written, const std::string &path, std::uint32_t w, std::uint32_t h) {
+        if (written) std::cout << "[render] window " << w << "x" << h << " -> " << path << std::endl;
+        else std::cout << "[render] cannot write " << path << std::endl;
+    };
+    if (mapped_ok && std::filesystem::path(capture_path).extension() == ".png") {
+        // Encoding a PNG of the window takes hundreds of milliseconds (430
+        // for a 1080p frame of a game), which held the game still: it runs
+        // on a thread of its own, from a copy of the pixels.
+        std::vector<std::uint8_t> copy(pixels, pixels + std::size_t(width) * height * 4u);
+        capture_writer = std::async(std::launch::async, [=, copy = std::move(copy), path = capture_path] {
+            report(write_png(install::path_from_utf8(path), copy, width, height, bgra, true), path, width, height);
+        });
+    } else {
+        report(mapped_ok && write_bmp(capture_path, pixels, width, height, bgra), capture_path, width, height);
+    }
     if (mapped_ok) vkUnmapMemory(device, capture_memory);
     vkDestroyBuffer(device, capture_buffer, nullptr);
     vkFreeMemory(device, capture_memory, nullptr);
