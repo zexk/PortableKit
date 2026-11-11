@@ -404,8 +404,8 @@ void Menu::video() {
         RowOptions o = options_for("video.interpolation_lead",
                                    "Frame interpolation shows each frame later than it was made, to have the next "
                                    "one to blend towards. Prediction shows it sooner by continuing motion past the "
-                                   "newest frame instead. 0% is the smoothest; 100% is as quick to react as without "
-                                   "interpolation, with a brief overshoot when something stops or turns. At 60 any "
+                                   "newest frame instead, by a sixtieth of a second at most. 0% is the smoothest; 100% "
+                                   "reacts quickest, with a brief overshoot when something stops or turns. At 60 any "
                                    "value above 0% removes the whole delay.");
         if (s.unthrottled || s.frame_rate == settings::FrameRate::Fps30) o.disabled = true;
         int lead = static_cast<int>(s.interpolation_lead_percent);

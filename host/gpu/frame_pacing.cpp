@@ -83,8 +83,11 @@ void PresentClock::apply_offsets() noexcept {
     // Grid moments less than this far into their frame are carried on; the
     // first one past it needs the next frame, and the delay is what that
     // one needs: no shorter than the lead asked for, often more.
-    const std::int64_t below =
-        first_step_us_ + std::llround(lead_ * static_cast<double>(frame_us_ - first_step_us_));
+    // No further than a vblank, though: carried on in a straight line, a
+    // picture is off by however much its motion changed, and past that a
+    // game at 20 frames a second judders with every turn of the camera.
+    const std::int64_t below = std::min<std::int64_t>(
+        first_step_us_ + std::llround(lead_ * static_cast<double>(frame_us_ - first_step_us_)), kMaxCarryUs + 1);
     std::int64_t needs_next = frame_us_;
     for (int index = 1; index <= 64; ++index) {
         const std::int64_t at = offset(index);

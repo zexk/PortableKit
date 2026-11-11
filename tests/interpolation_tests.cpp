@@ -461,14 +461,14 @@ void present_clock() {
     check(pattern(ahead45, {1.0f, 2.0f / 3.0f, 4.0f / 3.0f}, 4u) && monotonic && skipped == 0u,
           "45 with half the lead: the moment a third into a frame is carried on, two thirds is blended");
     // At 144 the grid never quite meets the frames, so without a lead the
-    // delay is nearly a whole frame; with the full lead a present needs the
-    // next frame only when it falls within the code's margin before it.
+    // delay is nearly a whole frame; the full lead carries presents on, but
+    // none further than a vblank, half this frame.
     const std::vector<float> ahead144 = run_clock(144.0, 4000, 60, monotonic, skipped, -1, 1.0);
     const auto carried = std::count_if(ahead144.begin() + 8, ahead144.end(), [](float t) { return t > 1.001f; });
     check(monotonic && skipped == 0u &&
-              std::all_of(ahead144.begin() + 8, ahead144.end(), [](float t) { return t > 0.95f && t < 2.0f; }) &&
-              carried * 10 > static_cast<std::ptrdiff_t>(ahead144.size() - 8u) * 9,
-          "144 with the full lead: nearly every present carries the newest frame on");
+              std::all_of(ahead144.begin() + 8, ahead144.end(), [](float t) { return t > 0.45f && t < 1.501f; }) &&
+              carried * 10 > static_cast<std::ptrdiff_t>(ahead144.size() - 8u) * 4,
+          "144 with the full lead: presents carry the newest frame on, at most a vblank");
     run_clock(60.0, 12000, 40, monotonic, skipped, 20, 1.0);
     check(monotonic, "a late frame with a lead holds rather than going back");
     PresentClock leading;

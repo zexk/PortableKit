@@ -34,7 +34,8 @@
 // moment less than the first step plus the lead into its frame, whose next
 // frame is not there yet, is shown by carrying the newest frame's motion on
 // (a blend factor above 1) instead of waiting. Every present still shows its
-// grid moment. At the full lead a frame is on screen when its code has run,
+// grid moment. No present is carried further than a vblank (kMaxCarryUs).
+// Where that covers the wait, a frame is on screen when its code has run,
 // as without interpolation; the price is a brief overshoot when motion stops
 // or turns. At 60 any lead carries every halfway present on, so it is all
 // or nothing there.
@@ -107,6 +108,8 @@ public:
     [[nodiscard]] std::int64_t work_us() const noexcept { return work_us_; }
 
     static constexpr std::int64_t kWorkMarginUs = 1000;
+    // The furthest a present is carried past the newest frame: one vblank.
+    static constexpr std::int64_t kMaxCarryUs = 16'683;
     static constexpr std::size_t kWorkWindowFrames = 60;
     static constexpr std::size_t kWorkRank = 8;  // how many of the window may be later
 
