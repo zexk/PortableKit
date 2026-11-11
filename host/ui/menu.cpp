@@ -18,6 +18,7 @@
 #include "adhoc/discovery.hpp"
 #include "adhoc/session.hpp"
 #include "audio/audio_sink.hpp"
+#include "fonts/game_font.hpp"
 #include "gpu/frame_pacing.hpp"
 #include "gpu/vulkan_renderer.hpp"
 #include "profile.hpp"
@@ -412,6 +413,12 @@ void Menu::video() {
             settings::save();
         }
     }
+    // Prediction and Lower when behind act on the frames between the game's.
+    const auto needs_interpolation = [&](RowOptions &o) {
+        if (o.disabled || !(s.unthrottled || s.frame_rate == settings::FrameRate::Fps30)) return;
+        o.disabled = true;
+        o.note = s.unthrottled ? "Game speed is Unlimited" : "Needs a higher frame rate";
+    };
     {
         RowOptions o = options_for("video.interpolation_lead",
                                    "Frame interpolation shows each frame later than it was made, to have the next "
@@ -419,7 +426,7 @@ void Menu::video() {
                                    "newest frame instead, by a sixtieth of a second at most. 0% is the smoothest; 100% "
                                    "reacts quickest, with a brief overshoot when something stops or turns. At 60 any "
                                    "value above 0% removes the whole delay.");
-        if (s.unthrottled || s.frame_rate == settings::FrameRate::Fps30) o.disabled = true;
+        needs_interpolation(o);
         int lead = static_cast<int>(s.interpolation_lead_percent);
         if (slider_row("Prediction", lead, 0, 100, 10, "%d%%", o)) {
             s.interpolation_lead_percent = static_cast<std::uint32_t>(lead);
@@ -430,7 +437,7 @@ void Menu::video() {
         RowOptions o = options_for("video.frame_rate_auto",
                                    "On lowers the frame rate by itself when presenting that often would slow the "
                                    "game. Off keeps the chosen rate, and the game may then run below full speed.");
-        if (s.unthrottled || s.frame_rate == settings::FrameRate::Fps30) o.disabled = true;
+        needs_interpolation(o);
         if (choice_row("Lower when behind", s.frame_rate_auto ? "On" : "Off", o)) {
             s.frame_rate_auto = !s.frame_rate_auto;
             renderer().set_frame_rate_auto(s.frame_rate_auto);
@@ -473,6 +480,10 @@ void Menu::video() {
         restore("video.frame_rate_auto", s.frame_rate_auto, d.frame_rate_auto);
         restore("video.interpolation_lead", s.interpolation_lead_percent, d.interpolation_lead_percent);
         restore("video.performance", s.perf, d.perf);
+        const std::string font = s.font;
+        const std::uint32_t weight = s.font_weight;
+        restore("text.font", s.font, d.font);
+        restore("text.weight", s.font_weight, d.font_weight);
         renderer().set_internal_scale(s.internal_scale);
         renderer().set_fullscreen(s.fullscreen);
         renderer().set_window_scale(s.window_scale);
@@ -485,6 +496,7 @@ void Menu::video() {
         renderer().set_frame_rate_auto(s.frame_rate_auto);
         renderer().set_perf_overlay(perf::options().overlay);
         settings::save();
+        if (s.font != font || s.font_weight != weight) fonts::reload();
     }
 }
 
@@ -548,7 +560,8 @@ void Menu::gameplay() {
         s.menu_pause = !s.menu_pause;
         settings::save();
     }
-    if (toggle_row("Pause during multiplayer", s.menu_pause_multiplayer,
+    // Ad hoc play only, so left out with the Network tab.
+    if (portablekit::game().adhoc_menu && toggle_row("Pause during multiplayer", s.menu_pause_multiplayer,
                    options_for("ui.menu_pause_multiplayer",
                                "In ad hoc play the game keeps running behind the menu unless this is on: a paused "
                                "game stops answering the other players and can drop a quest. Applies the next time "
