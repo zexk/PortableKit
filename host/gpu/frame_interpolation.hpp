@@ -48,6 +48,10 @@ struct DrawSummary {
     // A through-mode draw (screen coordinates: the interface) that is not a
     // clear. Blended by its vertices with CutThresholds::through.
     bool through{};
+    // The middle of the draw's vertices in object space, where the renderer
+    // had them decoded; otherwise the origin. Several meshes of one piece of
+    // scenery share a world matrix, so the origin does not say where each is.
+    std::array<float, 3> middle{};
     Matrix world{};
     Matrix view{};
     Matrix projection{};

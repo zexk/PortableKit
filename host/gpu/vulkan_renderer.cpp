@@ -7390,6 +7390,17 @@ void VulkanRenderer::Impl::record_draw_for_replay(const DrawCall &call, bool lit
         for (std::uint32_t row = 0; row < 3u; ++row)
             summary.eye_translation[row] =
                 eye[row] * first.x + eye[4u + row] * first.y + eye[8u + row] * first.z + eye[12u + row];
+    } else if (!call.through && !call.vertices.empty()) {
+        std::array<float, 3> low = {call.vertices[0].position[0], call.vertices[0].position[1],
+                                    call.vertices[0].position[2]};
+        std::array<float, 3> high = low;
+        for (const Vertex &vertex : call.vertices)
+            for (std::size_t axis = 0; axis < 3u; ++axis) {
+                low[axis] = std::min(low[axis], vertex.position[axis]);
+                high[axis] = std::max(high[axis], vertex.position[axis]);
+            }
+        for (std::size_t axis = 0; axis < 3u; ++axis)
+            frame.summaries.back().middle[axis] = 0.5f * (low[axis] + high[axis]);
     }
 }
 
@@ -7876,14 +7887,23 @@ void VulkanRenderer::Impl::replay(VkCommandBuffer commands, std::uint32_t slot, 
                 alone = paired[i] == 0;
             if (!alone) continue;
             const interpolation::DrawSummary &to = newer.summaries[drawn.first_draw];
-            // Only what the older frame could not have shown: its origin, where
+            // Only what the older frame could not have shown: its middle, where
             // the older camera saw it, lies off that frame's screen or near its
             // edge, within CutThresholds::bring_edge of the centre (an object
-            // coming in may have its origin in view before its bounds were). Something well in view the game simply did not draw
-            // then (a blinking marker) is left as the older frame had it.
+            // coming in may have its middle in view before its bounds were).
+            // Something well in view the game simply did not draw then (a
+            // blinking marker) is left as the older frame had it. The origin
+            // stood for the middle before, and left out every mesh coming
+            // into view that belongs to scenery whose origin was in view;
+            // <prefix>_INTERPOLATION_BRING_ORIGIN takes the origin again.
+            static const bool by_origin = portablekit::env("INTERPOLATION_BRING_ORIGIN") != nullptr;
             const interpolation::Matrix was = interpolation::multiply(
                 camera_motion.inverse, interpolation::multiply(to.view, to.world));
-            const interpolation::Matrix clip = interpolation::multiply(to.projection, was);
+            const interpolation::Matrix at = interpolation::multiply(to.projection, was);
+            const std::array<float, 3> middle = by_origin ? std::array<float, 3>{} : to.middle;
+            std::array<float, 16> clip{};
+            for (std::size_t row = 0; row < 4u; ++row)
+                clip[12u + row] = at[row] * middle[0] + at[4u + row] * middle[1] + at[8u + row] * middle[2] + at[12u + row];
             const float w = clip[15];
             const float edge = cut_thresholds.bring_edge * w;
             const bool inside = w > 0.0f && std::fabs(clip[12]) <= edge && std::fabs(clip[13]) <= edge;
