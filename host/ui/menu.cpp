@@ -552,6 +552,8 @@ void Menu::gameplay() {
         }
     }
     if (portablekit::game().draw_game_settings) portablekit::game().draw_game_settings();
+    // One of them asked for a restart (GameProfile::draw_game_settings).
+    if (install::restart_requested_on_exit()) quit_ = close_ = true;
     section("Menu");
     if (toggle_row("Pause the game when the menu opens", s.menu_pause,
                    options_for("ui.menu_pause", "On: the game stops while this menu is open. Off: it keeps running "

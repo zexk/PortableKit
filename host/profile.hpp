@@ -274,6 +274,8 @@ struct GameProfile {
 
     // Optional port-owned controls drawn in the Game tab, and their reset
     // when the player restores that page's defaults. The port owns persistence.
+    // A control there restarts the game with install::request_restart_on_exit():
+    // the menu quits, and the program starts again as it was started.
     void (*draw_game_settings)() = nullptr;
     void (*reset_game_settings)() = nullptr;
     // Optional screen of the port's own, opened from one of those controls.
