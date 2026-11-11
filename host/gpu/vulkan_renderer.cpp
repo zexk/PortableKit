@@ -7937,9 +7937,14 @@ void VulkanRenderer::Impl::replay(VkCommandBuffer commands, std::uint32_t slot, 
     // is paired with the draw call of the other frame that has the same
     // state and size, in drawing order, when both frames have as many of
     // those. A count that differs (a glyph more, a marker gone) pairs none
-    // of them: which is which cannot be told.
+    // of them: which is which cannot be told. Carried on (`ahead`), the
+    // sprites go on past the newer frame like everything else; held there
+    // instead, the interface stood still for the carried part of each frame
+    // and caught up in the rest. <prefix>_INTERPOLATION_NO_THROUGH_CARRY
+    // holds them as the newer frame drew them.
+    static const bool no_through_carry = portablekit::env("INTERPOLATION_NO_THROUGH_CARRY") != nullptr;
     std::vector<std::uint32_t> through_mate;
-    if (cut_thresholds.through && !ahead && t > 0.0f) {
+    if (cut_thresholds.through && t > 0.0f && !(ahead && no_through_carry)) {
         const auto keyed = [](const FrameRecord &frame) {
             std::vector<std::pair<std::uint64_t, std::uint32_t>> keys;
             for (std::uint32_t i = 0; i < frame.groups.size(); ++i) {
@@ -7970,8 +7975,8 @@ void VulkanRenderer::Impl::replay(VkCommandBuffer commands, std::uint32_t slot, 
                              [](const auto &a, const auto &b) { return a.first < b.first; });
             return keys;
         };
-        const auto from = keyed(older), to = keyed(newer);
-        through_mate.assign(older.groups.size(), kNone);
+        const auto from = keyed(base), to = keyed(other);
+        through_mate.assign(base.groups.size(), kNone);
         for (std::size_t a = 0u, b = 0u; a < from.size();) {
             std::size_t a_end = a, b_end = b;
             while (a_end < from.size() && from[a_end].first == from[a].first) ++a_end;
@@ -8166,9 +8171,9 @@ void VulkanRenderer::Impl::replay(VkCommandBuffer commands, std::uint32_t slot, 
             // The same sprites, moved: every vertex keeps its texture
             // coordinates and stays within max_through_step. Only x, y and the
             // colour are blended; w and the normal carry a sprite's texel bounds.
-            const ReplayGroup &next = newer.groups[through_mate[index]];
-            const GpuVertex *a = older.skinned.data() + drawn.skinned;
-            const GpuVertex *b = newer.skinned.data() + next.skinned;
+            const ReplayGroup &next = other.groups[through_mate[index]];
+            const GpuVertex *a = base.skinned.data() + drawn.skinned;
+            const GpuVertex *b = other.skinned.data() + next.skinned;
             const float limit = cut_thresholds.max_through_step;
             // Not same_state(): the lighting block offsets lie in each frame's
             // own region of the buffer, and a through-mode draw uses none.
@@ -8178,8 +8183,8 @@ void VulkanRenderer::Impl::replay(VkCommandBuffer commands, std::uint32_t slot, 
                                std::memcmp(&sa.scissor, &sb.scissor, sizeof(VkRect2D)) == 0 && sa.blend == sb.blend &&
                                std::memcmp(&sa.push, &sb.push, sizeof(PushConstants)) == 0;
             bool same = alike && next.vertex_count == drawn.vertex_count &&
-                        drawn.skinned + drawn.vertex_count <= older.skinned.size() &&
-                        next.skinned + next.vertex_count <= newer.skinned.size();
+                        drawn.skinned + drawn.vertex_count <= base.skinned.size() &&
+                        next.skinned + next.vertex_count <= other.skinned.size();
             bool moved = false;
             for (std::uint32_t v = 0; same && v < drawn.vertex_count; ++v) {
                 same = a[v].u == b[v].u && a[v].v == b[v].v && std::fabs(b[v].x - a[v].x) <= limit &&
@@ -8195,13 +8200,15 @@ void VulkanRenderer::Impl::replay(VkCommandBuffer commands, std::uint32_t slot, 
                     GpuVertex blended = a[v];
                     blended.x += (b[v].x - blended.x) * s;
                     blended.y += (b[v].y - blended.y) * s;
-                    // A fade is the vertex colour's alpha stepping each frame.
+                    // A fade is the vertex colour's alpha stepping each frame;
+                    // carried on, it would step past the range.
                     if (a[v].color != b[v].color) {
                         std::uint32_t color = 0u;
                         for (std::uint32_t shift = 0u; shift < 32u; shift += 8u) {
                             const float from = static_cast<float>((a[v].color >> shift) & 0xFFu);
                             const float to = static_cast<float>((b[v].color >> shift) & 0xFFu);
-                            color |= static_cast<std::uint32_t>(std::lround(from + (to - from) * s)) << shift;
+                            color |= static_cast<std::uint32_t>(std::clamp(std::lround(from + (to - from) * s), 0L, 255L))
+                                     << shift;
                         }
                         blended.color = color;
                     }
