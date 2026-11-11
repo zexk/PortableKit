@@ -1029,7 +1029,7 @@ void sas_render(Runtime &rt, std::uint32_t core, std::uint32_t output, bool mix,
     }
 }
 
-// <prefix>_TRACE_SAS: voices set, keyed on and off, and each change of the
+// <prefix>_TRACE_SAS: voices set, pitched, keyed on and off, and each change of the
 // end flags the game polls.
 bool trace_sas() {
     static const bool enabled = portablekit::env("TRACE_SAS") != nullptr;
@@ -1181,6 +1181,7 @@ void register_audio(HleRegistrar &hle) {
     });
     hle.add("sceSasCore", "__sceSasSetPitch", [](Runtime &, AllegrexContext &ctx) {
         audio::sas_core(arg(ctx, 0)).set_pitch(arg(ctx, 1), arg(ctx, 2));
+        if (trace_sas()) std::cerr << "[sas] pitch " << arg(ctx, 1) << " " << arg(ctx, 2) << "\n";
         kernel().finish(ctx, 0u);
     });
     hle.add("sceSasCore", "__sceSasSetVolume", [](Runtime &, AllegrexContext &ctx) {
