@@ -6249,7 +6249,25 @@ void VulkanRenderer::submit(const DrawCall &call, const GuestMemory &memory) {
         const char *text = portablekit::env("DUMP_FRAME");
         return text != nullptr ? std::strtoull(text, nullptr, 10) : ~0ull;
     }();
-    if (impl.frames == dump_frame)
+    // <prefix>_DUMP_FRAME_AFTER=N: the same for every frame that follows one
+    // of at most N draws, to catch the first frames after a loading screen,
+    // whose numbers move from run to run.
+    static const std::uint64_t dump_after = [] {
+        const char *text = portablekit::env("DUMP_FRAME_AFTER");
+        return text != nullptr ? std::strtoull(text, nullptr, 10) : ~0ull;
+    }();
+    static std::uint64_t counted_frame = 0u, draws_now = 0u, draws_before = ~0ull;
+    if (dump_after != ~0ull) {
+        if (impl.frames != counted_frame) {
+            counted_frame = impl.frames;
+            draws_before = draws_now;
+            draws_now = 0u;
+            if (draws_before <= dump_after) std::printf("[draw] frame %llu\n", static_cast<unsigned long long>(impl.frames));
+        }
+        ++draws_now;
+    }
+    const bool dump_this = impl.frames == dump_frame || draws_before <= dump_after;
+    if (dump_this)
         std::printf("[draw] fb %08x %s prim %d n %zu type %08x tex %08x %ux%u fmt %d blend %d %u/%u eq %u fix %06x/%06x "
                     "depth %d%d f%u alpha %d f%u ref %u cull %d light %d mat %08x at %.0f %.0f %.0f verts %08x\n",
                     call.target.color_address, call.clear_mode ? "clear" : call.through ? "through" : "3d",
@@ -6262,7 +6280,7 @@ void VulkanRenderer::submit(const DrawCall &call, const GuestMemory &memory) {
                     call.alpha_test.reference, call.culling_enabled ? 1 : 0, call.lighting_enabled ? 1 : 0,
                     call.material_color, static_cast<double>(call.world[12]), static_cast<double>(call.world[13]),
                     static_cast<double>(call.world[14]), call.vertex_address);
-    if (impl.frames == dump_frame && !call.vertices.empty() && call.vertices.size() <= 4u)
+    if (dump_this && !call.vertices.empty() && call.vertices.size() <= 4u)
         for (const Vertex &v : call.vertices)
             std::printf("[draw]   v %.1f %.1f %.1f uv %.3f %.3f colour %08x\n", static_cast<double>(v.position[0]),
                         static_cast<double>(v.position[1]), static_cast<double>(v.position[2]),
