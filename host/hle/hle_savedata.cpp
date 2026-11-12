@@ -8,7 +8,9 @@
 // confirmed the first entry. Every mode, the failures included, reports QUIT
 // after a few polls; see utility_dialog.hpp.
 #include "../profile.hpp"
+#include "../system.hpp"
 #include "hle_common.hpp"
+#include "install/user_data.hpp"
 #include "utility_dialog.hpp"
 
 #include "crypto_keys.hpp"
@@ -124,6 +126,20 @@ SavedataState &state() {
     return s;
 }
 
+// The memory stick a save is read from: this game's own, or for another
+// game's save that is not there (GameProfile::other_game_saves), the memory
+// stick of the port that wrote it. Saves are only ever written to our own.
+std::filesystem::path stick_for(const savedata::SaveFiles &files) {
+    if (savedata::save_exists(state().memory_stick, files)) return state().memory_stick;
+    for (const auto &other : game().other_game_saves) {
+        if (files.game_name != other.game_name) continue;
+        const auto data = install::default_data_directory(other.data_organization, other.data_application);
+        if (!data.empty() && savedata::save_exists(memory_stick_directory(data), files))
+            return memory_stick_directory(data);
+    }
+    return state().memory_stick;
+}
+
 bool trace_savedata() {
     static const bool enabled = portablekit::env("TRACE_SAVEDATA") != nullptr;
     return enabled;
@@ -231,13 +247,14 @@ std::uint32_t do_load(psprecomp::GuestMemory &memory, std::uint32_t params, cons
     const std::uint32_t capacity = memory.load32(params + param::kDataBufSize);
     if (files.game_name.empty() || files.file_name.empty() || buffer == 0u) return result::kLoadParam;
 
-    const auto loaded = savedata::load_save(state().memory_stick, files);
+    const auto stick = stick_for(files);
+    const auto loaded = savedata::load_save(stick, files);
     if (loaded.status == savedata::LoadStatus::NoData) {
-        std::cerr << "[savedata] no save data in " << savedata::save_folder(state().memory_stick, files).string() << "\n";
+        std::cerr << "[savedata] no save data in " << savedata::save_folder(stick, files).string() << "\n";
         return result::kLoadNoData;
     }
     if (loaded.status == savedata::LoadStatus::Broken) {
-        std::cerr << "[savedata] broken save in " << savedata::save_folder(state().memory_stick, files).string()
+        std::cerr << "[savedata] broken save in " << savedata::save_folder(stick, files).string()
                   << ": " << loaded.reason << "\n";
         return result::kLoadDataBroken;
     }
@@ -249,7 +266,7 @@ std::uint32_t do_load(psprecomp::GuestMemory &memory, std::uint32_t params, cons
     write_cstring(memory, params + param::kSavedataTitle, loaded.contents.savedata_title, 128u);
     write_cstring(memory, params + param::kDetail, loaded.contents.detail, 1024u);
     std::cerr << "[savedata] loaded " << count << " bytes from "
-              << savedata::save_folder(state().memory_stick, files).string()
+              << savedata::save_folder(stick, files).string()
               << (files.key ? " (decrypted)" : "") << (loaded.reason.empty() ? "" : ": " + loaded.reason) << "\n";
     // Encrypted files written by earlier builds are padded with zeros to a
     // multiple of 16 bytes, so a buffer the size the game saved leaves up to
@@ -319,7 +336,7 @@ std::uint32_t do_sizes(psprecomp::GuestMemory &memory, std::uint32_t params) {
         savedata::SaveFiles files;
         files.game_name = read_cstring(memory, data, 13u);
         files.save_name = save_name_at(memory, data + 16u);
-        const std::uint64_t bytes = savedata::save_size(state().memory_stick, files);
+        const std::uint64_t bytes = savedata::save_size(stick_for(files), files);
         const std::uint32_t info = data + 36u;
         const auto clusters = static_cast<std::uint32_t>((bytes + kClusterSize - 1u) / kClusterSize);
         memory.store32(info, clusters);
@@ -351,7 +368,8 @@ std::uint32_t do_sizes(psprecomp::GuestMemory &memory, std::uint32_t params) {
 std::optional<std::string> pick_from_list(psprecomp::GuestMemory &memory, std::uint32_t params, bool must_exist) {
     const auto names = save_name_list(memory, memory.load32(params + param::kSaveNameList));
     for (const auto &name : names) {
-        if (!must_exist || savedata::save_exists(state().memory_stick, files_for(memory, params, name))) return name;
+        const auto files = files_for(memory, params, name);
+        if (!must_exist || savedata::save_exists(stick_for(files), files)) return name;
     }
     if (!must_exist) return save_name_at(memory, params + param::kSaveName);
     return std::nullopt;

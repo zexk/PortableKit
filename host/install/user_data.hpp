@@ -29,6 +29,9 @@ inline constexpr const char *kPortableFolder = "portable";
 // (or the same location computed by hand in a build without SDL). SDL creates
 // the directory if it does not exist yet.
 [[nodiscard]] std::filesystem::path user_data_directory();
+// Where a port with these data_organization and data_application names keeps
+// its data unless told otherwise, without creating it; empty when unknown.
+[[nodiscard]] std::filesystem::path default_data_directory(const char *organization, const char *application);
 
 // From here on, what the program writes to std::cout and std::cerr also goes
 // to <app_name>.log in the data directory, the run before's kept as

@@ -41,6 +41,16 @@ struct SaveFolder {
     bool exported;           // included when the player exports or backs up
 };
 
+// Another game's saves this one reads, as a PSP would find both games' on one
+// memory stick (Portable Ops+ imports Portable Ops units): the folder name the
+// game asks for, and the names of the port that writes them, as its own
+// data_organization and data_application.
+struct OtherGameSaves {
+    const char *game_name;         // e.g. "ULUS10202"
+    const char *data_organization;
+    const char *data_application;
+};
+
 // A choice of what LT/RT (L2/R2) press past the trigger point, beside the
 // framework's own: L and R, like the shoulders.
 struct TriggerProfile {
@@ -208,6 +218,9 @@ struct GameProfile {
     // --- Save data ---------------------------------------------------------
     const char *save_game_name;             // the main folder, e.g. "ULJM05800"
     std::span<const SaveFolder> save_folders;
+    // A save of one of these games not on this game's memory stick is read
+    // from that port's, in its default data folder. Never written there.
+    std::span<const OtherGameSaves> other_game_saves = {};
 
     // --- What the player is called -----------------------------------------
     // How the interface names the name the game asks for: "Hunter name".

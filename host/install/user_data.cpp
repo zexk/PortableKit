@@ -30,12 +30,10 @@ std::string trim(const std::string &text) {
     return text.substr(first, last - first + 1u);
 }
 
-#if !defined(PORTABLEKIT_HAS_SDL)
 std::filesystem::path environment_path(const char *name) {
     const char *value = std::getenv(name);
     return value != nullptr && *value != '\0' ? path_from_utf8(value) : std::filesystem::path{};
 }
-#endif
 
 } // namespace
 
@@ -66,6 +64,13 @@ std::filesystem::path user_data_directory() {
     SDL_free(pref);
     return result;
 #else
+    const auto dir = default_data_directory(portablekit::game().data_organization, portablekit::game().data_application);
+    if (dir.empty()) throw psprecomp::Error(std::string("Cannot determine the user data directory; set ") + portablekit::env_name("DATA_DIR"));
+    return dir;
+#endif
+}
+
+std::filesystem::path default_data_directory(const char *organization, const char *application) {
     // The locations SDL_GetPrefPath uses, so builds with and without SDL agree.
     std::filesystem::path base;
 #if defined(_WIN32)
@@ -76,9 +81,7 @@ std::filesystem::path user_data_directory() {
     base = environment_path("XDG_DATA_HOME");
     if (const auto home = environment_path("HOME"); base.empty() && !home.empty()) base = home / ".local" / "share";
 #endif
-    if (base.empty()) throw psprecomp::Error(std::string("Cannot determine the user data directory; set ") + portablekit::env_name("DATA_DIR"));
-    return base / portablekit::game().data_organization / portablekit::game().data_application;
-#endif
+    return base.empty() ? base : base / organization / application;
 }
 
 SettingsEntries read_settings_file(const std::filesystem::path &data_dir) {

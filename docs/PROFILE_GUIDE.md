@@ -51,6 +51,7 @@ Read the values off the player's own disc rather than recalling them:
 | `load_base`, `guest_ram_bytes` | The ELF's program headers |
 | `overlay_slots` | The executable's section table, inside the load image's BSS |
 | `save_game_name`, `save_folders` | The paths the executable itself contains |
+| `other_game_saves` | Another game's saves this one reads, such as a sequel importing progress: the game name `<PREFIX>_TRACE_SAVEDATA` shows it asking for, and the data names of the port that writes them |
 
 `release_name` and `other_releases` are for the installer's refusal: the first names the supported release ("the Japanese release"), the second gives the sentence to add for a release a player is likely to have instead. Yakumo tells a player with the original PSP release, ULJM05800, that it is not the HD release.
 
