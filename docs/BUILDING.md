@@ -64,7 +64,7 @@ Measured on an Apple M1 with 8 GB, from a fresh clone with an empty compiler cac
 | Compiling the corpus | hours |
 | Each code overlay | seconds to a minute |
 
-**The generated units are very large, so compiling them needs a lot of memory.** The build limits how many compile at once to one per 4 GiB, whatever `-j` you pass (`PSPRECOMP_GENERATED_JOBS`). That is 2 on an 8 GB machine, and passing `-j8` does not make it faster, only more likely to swap.
+**The generated units are very large, so compiling them needs a lot of memory.** The build limits how many compile at once to one per 2 GiB (4 GiB with MSVC), whatever `-j` you pass (`PSPRECOMP_GENERATED_JOBS`). That is 4 on an 8 GB machine, and a higher `-j` does not raise it, only the other targets. With GCC 16.2 on Linux, Portable Ops units peaked at 0.84 GB for the largest main unit at `-O2` and 0.3 to 0.64 GB for module units at `-Os` and `-O1`; [DESKTOP_APP.md](DESKTOP_APP.md) has Clang's.
 
 **It is slow only once.** With `ccache` installed, which the build uses automatically, a later rebuild of unchanged generated code takes seconds, across checkouts.
 
@@ -80,7 +80,7 @@ Measured on an Apple M1 with 8 GB, from a fresh clone with an empty compiler cac
 | Option | Default | What it does |
 | --- | --- | --- |
 | `PSPRECOMP_GENERATED_OPT_LEVEL` | `2` | Optimisation level for generated units. `0` compiles much faster and runs much slower |
-| `PSPRECOMP_GENERATED_JOBS` | memory / 4 GiB | How many generated units compile at once |
+| `PSPRECOMP_GENERATED_JOBS` | memory / 2 GiB (MSVC: 4 GiB) | How many generated units compile at once |
 | `PSPRECOMP_BUILD_TESTS` | `ON` standalone, `OFF` in a port | Build framework tests and host compile checks |
 | `PORTABLEKIT_RENDERER` | `ON` | Build the Vulkan renderer. Off gives a headless build |
 | `PORTABLEKIT_FFMPEG` | `bundled` | `bundled` builds FFmpeg with the project, `system` uses one found through pkg-config, `OFF` drops music and movies |

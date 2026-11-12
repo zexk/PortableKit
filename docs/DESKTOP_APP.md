@@ -221,7 +221,7 @@ LocoRoco 2's corpus: 19 201 functions, 193 C++ units plus the registry and the a
 | Link the DLL against the program's import library | 1.2 s, 281 MB | |
 | Load it and register 789 044 addresses | 141 ms | |
 
-The -O0 corpus compiles **12× faster** than -O2 on the Mac, and 14× on Windows. Memory is not the limit at either level with clang: 0.3 GB per job at -O0, 0.5–0.9 GB at -O2 (the largest unit's compiler reached 0.9 GB in the tiered run). Four jobs instead of two on the M1 gained only 9% at -O2 (it has four fast cores, and the machine was swapping); the Ryzen with 6 jobs was twice as fast. The framework's own build allows one generated unit per 4 GiB, which is far too cautious for clang (it was set for MSVC, where units took over a gigabyte); the app uses one job per GiB left after 3 GiB, and at most half the cores.
+The -O0 corpus compiles **12× faster** than -O2 on the Mac, and 14× on Windows. Memory is not the limit at either level with clang: 0.3 GB per job at -O0, 0.5–0.9 GB at -O2 (the largest unit's compiler reached 0.9 GB in the tiered run). Four jobs instead of two on the M1 gained only 9% at -O2 (it has four fast cores, and the machine was swapping); the Ryzen with 6 jobs was twice as fast. The framework's own build allowed one generated unit per 4 GiB, which is far too cautious for clang (it was set for MSVC, where units took over a gigabyte; it now allows one per 2 GiB, 4 GiB only with MSVC); the app uses one job per GiB left after 3 GiB, and at most half the cores.
 
 **Speed** of each, in the same scripted run (LocoRoco 2 runs at 20 frames a second, so a frame's budget is 50 ms). Guest time per frame, and the lowest one-second speed seen, which is where the game loads a level:
 

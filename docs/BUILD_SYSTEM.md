@@ -82,7 +82,7 @@ and migration estimates below retain the old arrangement as measured. See
 | Warning for Ninja 1.13.2 (rank 4) | `cmake/BuildLock.cmake` | once per build directory | — |
 | ccache (rank 2) | top-level `CMakeLists.txt` | used when installed | `-DPSPRECOMP_CCACHE=OFF` |
 | Path defines only on `host/main.cpp` (item 4.4) | `profiles/mhp3rd/CMakeLists.txt` | — | — |
-| Job pool for generated code (rank 3) | `psprecomp_generated` pool, `JOB_POOL_COMPILE` on `MHP3rdNative` and every overlay | one job per 4 GiB of memory, at least 1 | `-DPSPRECOMP_GENERATED_JOBS=N` |
+| Job pool for generated code (rank 3) | `psprecomp_generated` pool, `JOB_POOL_COMPILE` on `MHP3rdNative` and every overlay | one job per 2 GiB of memory (4 GiB with MSVC), at least 1 | `-DPSPRECOMP_GENERATED_JOBS=N` |
 | Explicit `-j` in `add_overlay.py` (rank 3) | `add_overlay.py -j N` | 2 | `-j N` |
 | No per-overlay reconfigure, one Ninja for all overlays (rank 5) | `add_overlay.py --no-build`, `build_overlays.sh [build_dir] [jobs]` | 2 jobs | second argument |
 | Regeneration keeps unchanged units (item 4.3) | `generate.sh` | — | — |

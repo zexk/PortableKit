@@ -33,7 +33,7 @@ It also builds `portablekit_host_check`: the whole backend-independent system la
 
 A port's repository adds this one as a subdirectory and calls `portablekit_add_game()`. [docs/BUILDING.md](docs/BUILDING.md) covers the whole build and where the time goes; the short version:
 
-- **Keep parallelism low** (`-j2`): each generated unit needs well over a gigabyte to compile. The build caps them at one per 4 GiB of memory whatever `-j` says.
+- **Let the pool limit generated code**: each generated unit needs up to about a gigabyte to compile with GCC or Clang, more with MSVC. The build caps them at one per 2 GiB of memory (4 GiB with MSVC) whatever `-j` says.
 - **Build with `cmake --build`, never `ninja` directly**: `cmake --build` holds the per-directory lock. One build per build directory. Never delete `.ninja_deps` or `.ninja_log`.
 - **Install `ccache`**; the build uses it automatically, across checkouts.
 - **A full recompile takes hours.** Do not wait for it before finding out what a new game needs.

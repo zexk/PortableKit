@@ -37,11 +37,17 @@ if(PSPRECOMP_CCACHE AND NOT CMAKE_CXX_COMPILER_LAUNCHER)
     endif()
 endif()
 
-# Each generated AOT unit takes well over a gigabyte to compile. Ninja runs the
-# compiles of targets in this pool at most this many at a time, whatever -j
-# the build was started with. The default allows one per 4 GiB of memory.
+# A generated AOT unit takes up to about a gigabyte to compile with GCC or
+# Clang (GCC 16.2: 0.3 to 0.84 GB at the default levels), more with MSVC. Ninja
+# runs the compiles of targets in this pool at most this many at a time,
+# whatever -j the build was started with. The default allows one per 2 GiB of
+# memory, 4 GiB with MSVC.
 cmake_host_system_information(RESULT _psprecomp_memory_mib QUERY TOTAL_PHYSICAL_MEMORY)
-math(EXPR _psprecomp_default_jobs "${_psprecomp_memory_mib} / 4096")
+if(MSVC)
+    math(EXPR _psprecomp_default_jobs "${_psprecomp_memory_mib} / 4096")
+else()
+    math(EXPR _psprecomp_default_jobs "${_psprecomp_memory_mib} / 2048")
+endif()
 if(_psprecomp_default_jobs LESS 1)
     set(_psprecomp_default_jobs 1)
 endif()
