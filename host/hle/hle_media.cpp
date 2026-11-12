@@ -435,6 +435,28 @@ void present_frame(Runtime &rt) {
                                            "; no further capture is reported");
         }
     }
+    // <prefix>_SCREENSHOT_AFTER=N (with SCREENSHOT_DIR): the first 24 game
+    // frames that follow one of at most N draws, to see what a scene's first
+    // frames after a loading screen look like.
+    static const std::uint64_t screenshot_after = [] {
+        const char *text = portablekit::env("SCREENSHOT_AFTER");
+        return text != nullptr ? std::strtoull(text, nullptr, 10) : ~0ull;
+    }();
+    if (screenshot_dir != nullptr && screenshot_after != ~0ull) {
+        static std::uint64_t total = 0u, before = ~0ull, left = 0u;
+        const std::uint64_t draws = renderer.draws_submitted() - total;
+        total = renderer.draws_submitted();
+        if (before <= screenshot_after && draws > screenshot_after) left = 24u;
+        before = draws;
+        if (left > 0u) {
+            --left;
+            const std::string path = std::string(screenshot_dir) + "/after_" +
+                                     std::to_string(renderer.frames_presented()) + ".bmp";
+            if (renderer.capture_frame(path))
+                std::cout << "[render] frame " << renderer.frames_presented() << " (" << draws << " draws) -> " << path
+                          << "\n";
+        }
+    }
     const bool window_open = renderer.pump_events();
     feed_mouse(renderer);
     if (!window_open) {
