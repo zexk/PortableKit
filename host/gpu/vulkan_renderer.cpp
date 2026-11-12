@@ -8034,7 +8034,18 @@ void VulkanRenderer::Impl::replay(VkCommandBuffer commands, std::uint32_t slot, 
     }
 
     replay_regions = 0u;
+    // What the base frame draws after its last 3D draw is laid over the scene:
+    // the interface, and a fade that covers the whole picture. Draws brought
+    // from the newer frame belong under it, so the rest of them go in before
+    // it starts. Left to the end, they showed at full brightness over a
+    // frame the game had covered in black (the first blend after a loading
+    // screen: characters lit on a black screen for a few presents).
+    std::size_t overlay_from = 0u;
+    for (std::size_t i = 0u; i < base.groups.size(); ++i)
+        if (base.groups[i].target == base.displayed && base.summaries[base.groups[i].first_draw].eligible)
+            overlay_from = i + 1u;
     for (const ReplayGroup &drawn : base.groups) {
+        if (static_cast<std::size_t>(&drawn - base.groups.data()) == overlay_from) bring_newer(newer.groups.size());
         if (drawn.target != base.displayed) continue;
         note_region(drawn.vertex_base);
         DrawState state = drawn.state;
