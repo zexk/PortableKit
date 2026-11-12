@@ -8640,6 +8640,23 @@ bool VulkanRenderer::present(std::uint32_t display_address,
         impl.cycle_active = impl.newer_picture_valid;
         static const bool check = portablekit::env("CHECK_REPLAY") != nullptr;
         if (check && impl.frames % 150u == 0u) impl.check_replay();
+        // <prefix>_CHECK_REPLAY_AFTER=N: the same for the 12 frames that follow
+        // one of at most N draws, for the first blends after a loading screen.
+        static const std::uint64_t check_after = [] {
+            const char *text = portablekit::env("CHECK_REPLAY_AFTER");
+            return text != nullptr ? std::strtoull(text, nullptr, 10) : ~0ull;
+        }();
+        if (check_after != ~0ull) {
+            static std::uint64_t total = 0u, before = ~0ull, left = 0u;
+            const std::uint64_t drawn = impl.draws - total;
+            total = impl.draws;
+            if (before <= check_after && drawn > check_after) left = 12u;
+            before = drawn;
+            if (left > 0u) {
+                --left;
+                impl.check_replay();
+            }
+        }
         impl.report_interpolation();
         impl.follow_window();
         // A present due now is made at once; it counts itself.
