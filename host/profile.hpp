@@ -291,6 +291,10 @@ struct GameProfile {
     // the menu quits, and the program starts again as it was started.
     void (*draw_game_settings)() = nullptr;
     void (*reset_game_settings)() = nullptr;
+    // The same for the Audio tab, drawn under the framework's own output
+    // controls and reset with "Restore audio defaults".
+    void (*draw_audio_settings)() = nullptr;
+    void (*reset_audio_settings)() = nullptr;
     // Optional screen of the port's own, opened from one of those controls.
     // Draws it and returns true while it is open; `back` is the back button.
     bool (*game_settings_screen)(bool back) = nullptr;

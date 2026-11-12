@@ -611,7 +611,7 @@ void Menu::audio() {
     };
     section("Output");
     int volume = static_cast<int>(s.volume);
-    if (slider_row("Volume", volume, 0, 100, 5, "%d%%",
+    if (slider_row("Master", volume, 0, 100, 5, "%d%%",
                    locked("audio.volume", "Loudness of everything the game plays."))) {
         s.volume = static_cast<std::uint32_t>(volume);
         sink.set_volume(gain(s));
@@ -624,12 +624,14 @@ void Menu::audio() {
     }
     info_row("Device", device ? (paused_ ? "44100 Hz stereo, paused while this menu is open" : "44100 Hz stereo")
                               : "None");
+    if (portablekit::game().draw_audio_settings) portablekit::game().draw_audio_settings();
     ImGui::Dummy({0.0f, font_gap()});
     if (button_row("Restore audio defaults", {!device, {}, "Full volume, not muted."})) {
         s.volume = settings::defaults().volume;
         s.mute = settings::defaults().mute;
         sink.set_volume(gain(s));
         settings::save();
+        if (portablekit::game().reset_audio_settings) portablekit::game().reset_audio_settings();
     }
 }
 
