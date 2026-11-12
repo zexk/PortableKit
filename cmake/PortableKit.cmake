@@ -105,6 +105,7 @@ set(PORTABLEKIT_RENDERER_SOURCES
     host/input/motion.cpp
     host/input/steam_deck_imu.cpp
     host/ui/input_script.cpp
+    host/ui/choice.cpp
     host/ui/layer.cpp
     host/ui/menu.cpp
     host/ui/save_screen.cpp

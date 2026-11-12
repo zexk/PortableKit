@@ -4,14 +4,19 @@
 // Load, save, delete, sizes and the list modes are answered from those
 // folders; each game uses its own few. <prefix>_TRACE_SAVEDATA prints every
 // request, which is how to find out which a game asks for.
-// No save-data UI is drawn: modes that would show a list act as if the player
-// confirmed the first entry. Every mode, the failures included, reports QUIT
-// after a few polls; see utility_dialog.hpp.
+// The modes that show a list on a PSP open the port's own (ui/choice.hpp) and
+// stay visible until the player chooses or backs out; without an interface
+// they act as if the player confirmed the first entry. Every other mode, the
+// failures included, reports QUIT after a few polls; see utility_dialog.hpp.
 #include "../profile.hpp"
 #include "../system.hpp"
 #include "hle_common.hpp"
 #include "install/user_data.hpp"
 #include "utility_dialog.hpp"
+
+#if defined(PORTABLEKIT_HAS_RENDERER)
+#include "ui/choice.hpp"
+#endif
 
 #include "crypto_keys.hpp"
 #include "save_data/savedata_crypto.hpp"
@@ -119,6 +124,12 @@ constexpr std::uint32_t kFreeClusters = 0x8000u;  // 1 GiB
 struct SavedataState {
     std::filesystem::path memory_stick;
     DialogLifecycle dialog;
+    // A list mode waiting for the player to choose (the request's parameter
+    // block, or 0), the names it listed, and the answer once there is one:
+    // an index into them, or nothing after Back.
+    std::uint32_t choosing{};
+    std::vector<std::string> names;
+    std::optional<std::optional<std::size_t>> answer;
 };
 
 SavedataState &state() {
@@ -375,6 +386,81 @@ std::optional<std::string> pick_from_list(psprecomp::GuestMemory &memory, std::u
     return std::nullopt;
 }
 
+// What a list mode does with the chosen save.
+std::uint32_t run_chosen(psprecomp::GuestMemory &memory, std::uint32_t params, const std::string &chosen) {
+    write_cstring(memory, params + param::kSaveName, chosen, 20u);
+    switch (memory.load32(params + param::kMode)) {
+    case kListLoad: return do_load(memory, params, chosen);
+    case kListSave: return do_save(memory, params, chosen);
+    default: return do_delete(memory, params, chosen);
+    }
+}
+
+// Opens the list a PSP shows for a list mode: the saves the game listed, the
+// existing ones by what they say about themselves. Loading and deleting can
+// choose only a save that exists. False when there is no interface to show
+// it in, nothing to choose from, or a single save to load; the request is
+// then answered at once, as if the player had confirmed the first entry
+// (pick_from_list).
+bool open_list(psprecomp::GuestMemory &memory, std::uint32_t params) {
+#if defined(PORTABLEKIT_HAS_RENDERER)
+    const std::uint32_t mode = memory.load32(params + param::kMode);
+    SavedataState &s = state();
+    s.names = save_name_list(memory, memory.load32(params + param::kSaveNameList));
+    ui::ChoiceRequest request;
+    request.title = mode == kListLoad ? "Load" : mode == kListSave ? "Save" : "Delete";
+    request.subtitle = portablekit::game().game_title;
+    std::size_t choosable = 0u;
+    for (const std::string &name : s.names) {
+        const savedata::SaveFiles files = files_for(memory, params, name);
+        const std::string folder = files.game_name + files.save_name;
+        ui::ChoiceItem item;
+        item.name = folder;
+        for (const SaveFolder &known : portablekit::game().save_folders)
+            if (folder == known.name) item.name = known.description;
+        const savedata::LoadResult found = savedata::load_save(stick_for(files), files);
+        if (found.status == savedata::LoadStatus::Ok) {
+            // The first line of what the save says about itself.
+            const std::string &detail = found.contents.detail.empty() ? found.contents.savedata_title : found.contents.detail;
+            item.detail = detail.substr(0, detail.find_first_of("\r\n"));
+        } else {
+            item.detail = found.status == savedata::LoadStatus::Broken ? "Damaged" : "Empty";
+            item.disabled = mode != kListSave;
+        }
+        if (!item.disabled && choosable++ == 0u) request.focus = request.items.size();
+        request.items.push_back(std::move(item));
+    }
+    // Nothing to choose from, or one save to load: no list, the first entry.
+    if (choosable == 0u || (choosable == 1u && mode == kListLoad)) return false;
+    s.answer.reset();
+    return ui::open_game_choice(std::move(request),
+                                [](std::optional<std::size_t> chosen) { state().answer = chosen; });
+#else
+    (void)memory;
+    (void)params;
+    return false;
+#endif
+}
+
+// One poll of the dialog: while the player is choosing it stays visible, and
+// the request runs once they have.
+std::uint32_t poll_dialog(psprecomp::GuestMemory &memory) {
+    SavedataState &s = state();
+    if (s.choosing != 0u && s.dialog.status() == dialog_status::kVisible) {
+        if (!s.answer) return dialog_status::kVisible;
+        const std::optional<std::size_t> chosen = *s.answer;
+        // Back: the dialog's own "cancelled" result.
+        const std::uint32_t outcome =
+            chosen && *chosen < s.names.size() ? run_chosen(memory, s.choosing, s.names[*chosen]) : 1u;
+        memory.store32(s.choosing + dialog_common::kResultOffset, outcome);
+        std::cerr << "[savedata] " << (chosen ? "chose \"" + s.names[*chosen] + "\"" : std::string("cancelled"))
+                  << ", result " << psprecomp::hex32(outcome) << "\n";
+        s.choosing = 0u;
+        s.answer.reset();
+    }
+    return s.dialog.poll();
+}
+
 // A save name pattern as LIST takes it: '?' stands for any one character.
 bool name_matches(std::string_view pattern, std::string_view name) {
     if (pattern.size() != name.size()) return false;
@@ -525,6 +611,14 @@ void register_savedata(HleRegistrar &hle, const std::filesystem::path &memory_st
         if (state().dialog.active())
             std::cerr << "[savedata] InitStart while a dialog is active (status " << state().dialog.status() << ")\n";
         log_request(memory, params);
+        state().choosing = 0u;
+        const std::uint32_t mode = memory.load32(params + param::kMode);
+        if ((mode == kListLoad || mode == kListSave || mode == kListDelete) && open_list(memory, params)) {
+            state().choosing = params;
+            state().dialog.start();
+            kernel().finish(ctx, 0u);
+            return;
+        }
         const std::uint32_t outcome = run_request(memory, params);
         memory.store32(params + dialog_common::kResultOffset, outcome);
         if (outcome != result::kOk || trace_savedata())
@@ -533,13 +627,13 @@ void register_savedata(HleRegistrar &hle, const std::filesystem::path &memory_st
         kernel().finish(ctx, 0u);
     });
 
-    hle.add("sceUtility", "sceUtilitySavedataUpdate", [](Runtime &, AllegrexContext &ctx) {
-        (void)state().dialog.poll();
+    hle.add("sceUtility", "sceUtilitySavedataUpdate", [](Runtime &rt, AllegrexContext &ctx) {
+        (void)poll_dialog(rt.memory());
         kernel().finish(ctx, 0u);
     });
 
-    hle.add("sceUtility", "sceUtilitySavedataGetStatus", [](Runtime &, AllegrexContext &ctx) {
-        const std::uint32_t status = state().dialog.poll();
+    hle.add("sceUtility", "sceUtilitySavedataGetStatus", [](Runtime &rt, AllegrexContext &ctx) {
+        const std::uint32_t status = poll_dialog(rt.memory());
         if (trace_savedata()) std::cerr << "[savedata] status " << status << "\n";
         kernel().finish(ctx, status);
     });
