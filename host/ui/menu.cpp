@@ -622,8 +622,6 @@ void Menu::audio() {
         sink.set_volume(gain(s));
         settings::save();
     }
-    info_row("Device", device ? (paused_ ? "44100 Hz stereo, paused while this menu is open" : "44100 Hz stereo")
-                              : "None");
     if (portablekit::game().draw_audio_settings) portablekit::game().draw_audio_settings();
     ImGui::Dummy({0.0f, font_gap()});
     if (button_row("Restore audio defaults", {!device, {}, "Full volume, not muted."})) {
@@ -1560,6 +1558,9 @@ void Menu::system() {
     if (!savedata::memory_stick().empty())
         info_row("Saves folder", install::path_to_utf8(savedata::memory_stick() / "PSP" / "SAVEDATA"));
     info_row("Graphics", "Vulkan on " + renderer().device_name());
+    info_row("Audio", audio::AudioSink::instance().has_device()
+                          ? (paused_ ? "44100 Hz stereo, paused while this menu is open" : "44100 Hz stereo")
+                          : "No device");
     info_row("Interface", std::string("Dear ImGui ") + IMGUI_VERSION);
 }
 
