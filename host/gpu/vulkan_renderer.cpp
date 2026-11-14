@@ -1020,6 +1020,7 @@ struct VulkanRenderer::Impl {
     // Window capture: the presented image is copied here and written after
     // its frame completes.
     std::string capture_path;
+    bool capture_game_only{};  // F12: the game's picture without the overlay and the interface
     VkBuffer capture_buffer{};
     VkDeviceMemory capture_memory{};
     VkExtent2D capture_extent{};
@@ -3694,12 +3695,44 @@ void VulkanRenderer::Impl::submit_and_present(VkCommandBuffer commands, VkFence 
             vkCmdClearColorImage(commands, target, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, &background, 1u,
                                  &range);
         }
+        VkImageLayout layout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+        // A window capture copies the image as it stands: an F12 screenshot
+        // before the overlay and the interface are drawn on it, a scripted
+        // capture after, as the window shows it.
+        const auto copy_capture = [&] {
+            if (capture_path.empty() || (swapchain_usage & VK_IMAGE_USAGE_TRANSFER_SRC_BIT) == 0u) return;
+            const VkDeviceSize bytes = static_cast<VkDeviceSize>(swapchain_extent.width) * swapchain_extent.height * 4u;
+            VkBufferCreateInfo buffer_info{VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO};
+            buffer_info.size = bytes;
+            buffer_info.usage = VK_BUFFER_USAGE_TRANSFER_DST_BIT;
+            if (vkCreateBuffer(device, &buffer_info, nullptr, &capture_buffer) != VK_SUCCESS) return;
+            VkMemoryRequirements requirements{};
+            vkGetBufferMemoryRequirements(device, capture_buffer, &requirements);
+            VkMemoryAllocateInfo allocate{VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO};
+            allocate.allocationSize = requirements.size;
+            allocate.memoryTypeIndex = find_memory_type(
+                requirements.memoryTypeBits, VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
+            vkAllocateMemory(device, &allocate, nullptr, &capture_memory);
+            vkBindBufferMemory(device, capture_buffer, capture_memory, 0u);
+            transition(commands, target, layout, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL);
+            layout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
+            VkBufferImageCopy copy{};
+            copy.imageSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0u, 0u, 1u};
+            copy.imageExtent = {swapchain_extent.width, swapchain_extent.height, 1u};
+            vkCmdCopyImageToBuffer(commands, target, layout, capture_buffer, 1u, &copy);
+            capture_extent = swapchain_extent;
+            capture = true;
+        };
+        if (capture_game_only) {
+            copy_capture();
+            transition(commands, target, layout, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL);
+            layout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+        }
         if (game_frame && overlay_visible) {
             const perf::Clock::time_point overlay_start = perf::Clock::now();
             record_overlay(commands, target);
             perf::add_overlay_time(perf::Clock::now() - overlay_start);
         }
-        VkImageLayout layout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
         if (draw_ui && image_index < ui_framebuffers.size()) {
             transition(commands, target, layout, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL);
             layout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
@@ -3712,31 +3745,7 @@ void VulkanRenderer::Impl::submit_and_present(VkCommandBuffer commands, VkFence 
             ImGui_ImplVulkan_RenderDrawData(ui, commands);
             vkCmdEndRenderPass(commands);
         }
-        if (!capture_path.empty() && (swapchain_usage & VK_IMAGE_USAGE_TRANSFER_SRC_BIT) != 0u) {
-            const VkDeviceSize bytes = static_cast<VkDeviceSize>(swapchain_extent.width) * swapchain_extent.height * 4u;
-            VkBufferCreateInfo buffer_info{VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO};
-            buffer_info.size = bytes;
-            buffer_info.usage = VK_BUFFER_USAGE_TRANSFER_DST_BIT;
-            if (vkCreateBuffer(device, &buffer_info, nullptr, &capture_buffer) == VK_SUCCESS) {
-                VkMemoryRequirements requirements{};
-                vkGetBufferMemoryRequirements(device, capture_buffer, &requirements);
-                VkMemoryAllocateInfo allocate{VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO};
-                allocate.allocationSize = requirements.size;
-                allocate.memoryTypeIndex =
-                    find_memory_type(requirements.memoryTypeBits,
-                                     VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
-                vkAllocateMemory(device, &allocate, nullptr, &capture_memory);
-                vkBindBufferMemory(device, capture_buffer, capture_memory, 0u);
-                transition(commands, target, layout, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL);
-                layout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
-                VkBufferImageCopy copy{};
-                copy.imageSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0u, 0u, 1u};
-                copy.imageExtent = {swapchain_extent.width, swapchain_extent.height, 1u};
-                vkCmdCopyImageToBuffer(commands, target, layout, capture_buffer, 1u, &copy);
-                capture_extent = swapchain_extent;
-                capture = true;
-            }
-        }
+        if (!capture_game_only) copy_capture();
 #if defined(__ANDROID__)
         if (prerotated() && image_index < upright_images.size()) record_rotation(commands, image_index, layout);
         else
@@ -5401,6 +5410,7 @@ bool VulkanRenderer::pump_events() {
                      std::filesystem::exists(path) || path == install::path_from_utf8(impl_->capture_written); ++suffix)
                     path = folder / ("screenshot-" + stamp + "-" + std::to_string(suffix) + ".png");
                 capture_window(install::path_to_utf8(path));
+                impl_->capture_game_only = true;
             } catch (const std::exception &e) {
                 std::cerr << "[render] cannot save screenshot: " << e.what() << std::endl;
             }
@@ -5894,6 +5904,7 @@ void VulkanRenderer::capture_window(const std::string &path) {
         return;
     }
     impl_->capture_path = path;
+    impl_->capture_game_only = false;
 }
 
 std::string VulkanRenderer::take_screenshot_note() {
