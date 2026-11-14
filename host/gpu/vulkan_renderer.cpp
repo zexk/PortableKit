@@ -146,6 +146,20 @@ void set_uv_rect(GpuVertex &vertex, float u_min, float v_min, float u_max, float
     vertex.w = v_max;
 }
 
+// A clear sprite over the whole screen, inside a scissor that keeps all of it.
+bool clears_screen(const DrawCall &call) {
+    if (!call.clear_mode || !call.through || call.primitive != PrimitiveType::Sprites ||
+        call.vertices.size() != 2u || !call.indices.empty() || call.viewport.scissor_x1 != 0u ||
+        call.viewport.scissor_y1 != 0u || call.viewport.scissor_x2 < kPspWidth - 1u ||
+        call.viewport.scissor_y2 < kPspHeight - 1u)
+        return false;
+    const Vertex &a = call.vertices[0];
+    const Vertex &b = call.vertices[1];
+    return std::min(a.position[0], b.position[0]) <= 0.0f && std::min(a.position[1], b.position[1]) <= 0.0f &&
+           std::max(a.position[0], b.position[0]) >= static_cast<float>(kPspWidth) &&
+           std::max(a.position[1], b.position[1]) >= static_cast<float>(kPspHeight);
+}
+
 // A through-mode tile is an axis-aligned rectangle of pixels showing an
 // axis-aligned rectangle of texels, usually a piece of an atlas. At 480x272
 // the raster samples the texels only between the centres of its edge pixels;
@@ -1076,6 +1090,11 @@ struct VulkanRenderer::Impl {
         std::uint32_t stride{512u};
         std::uint32_t format{3u};
         std::uint64_t last_drawn_frame{};
+        // Holds the game's 3D view, or a copy of one, since the buffer was
+        // last cleared whole. Under Fill a buffer without one (a menu, a
+        // cutscene, a movie) is shown at the PSP's shape, all of its 2D
+        // layers together.
+        bool view{};
         // Bumped by every draw into the target, so a copy made for sampling
         // knows when it is out of date.
         std::uint64_t draw_serial{};
@@ -1204,6 +1223,8 @@ struct VulkanRenderer::Impl {
     // image is used.
     Target held{};
     bool holding{};
+    // The picture being shown has no 3D view (Target::view).
+    bool show_flat{};
     // A load running fast: presents are thinned out (set_fast_forward).
     bool fast_forward{};
     std::chrono::steady_clock::time_point fast_forward_shown{};
@@ -1543,6 +1564,7 @@ struct VulkanRenderer::Impl {
         std::uint64_t texture_clock{};        // texture_clock when the frame began
         bool recorded{};                      // recorded for drawing again, in full
         bool valid{};
+        bool flat{};                          // its picture has no 3D view (Target::view)
         void clear() {
             summaries.clear();
             group_of.clear();
@@ -2010,9 +2032,6 @@ struct VulkanRenderer::Impl {
     void resize_targets(VkExtent2D extent);
     // After a present: follows the window's size or a changed setting.
     void follow_window();
-    // Movies keep their original proportions under Fill. False when no
-    // letterboxing is needed.
-    [[nodiscard]] bool movie_fit(float &fit_x, float &fit_y) const;
     void submit_and_present(VkImage source, bool game_frame) {
         submit_and_present(command_buffer, frame_fence, source, game_frame, true);
     }
@@ -3569,7 +3588,10 @@ bool VulkanRenderer::Impl::create_ui_framebuffers(std::string &error) {
 
 // Scales the game frame onto the swapchain image, which is in TRANSFER_DST
 // layout: stretched over the whole window, or at the PSP's aspect ratio with
-// black bars. Fill's target already has the window's shape.
+// black bars. Fill's target already has the window's shape; a picture without
+// the game's 3D view (show_flat: a menu, a cutscene, a movie) keeps the PSP's
+// shape under Fill too, unless the window's is within 1% of it (16:9 is).
+// <prefix>_STRETCH_2D stretches such a picture, a movie too.
 void VulkanRenderer::Impl::record_game_blit(VkCommandBuffer commands, VkImage source, VkImage destination) {
     const auto width = static_cast<std::int32_t>(content_rect.extent.width);
     const auto height = static_cast<std::int32_t>(content_rect.extent.height);
@@ -3579,10 +3601,14 @@ void VulkanRenderer::Impl::record_game_blit(VkCommandBuffer commands, VkImage so
     VkOffset3D high{x0 + width, y0 + height, 1};
     const bool partial = width < static_cast<std::int32_t>(swapchain_extent.width) ||
                          height < static_cast<std::int32_t>(swapchain_extent.height);
-    if (aspect == settings::Aspect::Original || partial) {
+    static const bool stretch_2d = portablekit::env("STRETCH_2D") != nullptr;
+    const double shape = static_cast<double>(width) * kPspHeight / (static_cast<double>(std::max(height, 1)) * kPspWidth);
+    const bool keep_shape = aspect == settings::Aspect::Original ||
+                            (aspect == settings::Aspect::Fill && show_flat && !stretch_2d && std::fabs(shape - 1.0) > 0.01);
+    if (keep_shape || partial) {
         std::int32_t shown_width = width;
         std::int32_t shown_height = height;
-        if (aspect == settings::Aspect::Original) {
+        if (keep_shape) {
             const double scale =
                 std::min(static_cast<double>(width) / kPspWidth, static_cast<double>(height) / kPspHeight);
             shown_width = std::clamp(static_cast<std::int32_t>(std::lround(kPspWidth * scale)), 1, width);
@@ -5662,16 +5688,6 @@ VkExtent2D VulkanRenderer::Impl::wanted_target_extent() const {
     return {width, height};
 }
 
-bool VulkanRenderer::Impl::movie_fit(float &fit_x, float &fit_y) const {
-    if (aspect != settings::Aspect::Fill) return false;
-    const float x = static_cast<float>(target_extent.width) / static_cast<float>(kPspWidth);
-    const float y = static_cast<float>(target_extent.height) / static_cast<float>(kPspHeight);
-    const float square = std::min(x, y);
-    fit_x = square / x;
-    fit_y = square / y;
-    return fit_x < 0.999f || fit_y < 0.999f;
-}
-
 void VulkanRenderer::Impl::follow_window() {
     if (!ready || recording) return;
     const VkExtent2D wanted = wanted_target_extent();
@@ -6140,22 +6156,8 @@ void VulkanRenderer::upload_frame(std::uint32_t display_address, const std::uint
     blit.dstSubresource = blit.srcSubresource;
     blit.dstOffsets[1] = {static_cast<std::int32_t>(impl.target_extent.width),
                           static_cast<std::int32_t>(impl.target_extent.height), 1};
-    // A movie has the PSP's shape: under Fill it keeps it, with black beside
-    // (or above and below) it.
-    float fit_x = 1.0f, fit_y = 1.0f;
-    if (impl.movie_fit(fit_x, fit_y)) {
-        const auto inset_x = static_cast<std::int32_t>(std::lround(0.5f * (1.0f - fit_x) * impl.target_extent.width));
-        const auto inset_y = static_cast<std::int32_t>(std::lround(0.5f * (1.0f - fit_y) * impl.target_extent.height));
-        blit.dstOffsets[0] = {inset_x, inset_y, 0};
-        blit.dstOffsets[1] = {static_cast<std::int32_t>(impl.target_extent.width) - inset_x,
-                              static_cast<std::int32_t>(impl.target_extent.height) - inset_y, 1};
-        const VkClearColorValue black{{0.0f, 0.0f, 0.0f, 1.0f}};
-        const VkImageSubresourceRange range{VK_IMAGE_ASPECT_COLOR_BIT, 0u, 1u, 0u, 1u};
-        vkCmdClearColorImage(impl.command_buffer, target->color, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, &black, 1u,
-                             &range);
-        impl.transition(impl.command_buffer, target->color, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
-                        VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL);
-    }
+    // A movie has the PSP's shape, which Fill keeps when showing it.
+    target->view = false;
     vkCmdBlitImage(impl.command_buffer, impl.upload_image, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, target->color,
                    VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1u, &blit, VK_FILTER_LINEAR);
     target->msaa_stale = impl.multisampled();
@@ -6977,20 +6979,9 @@ void VulkanRenderer::submit(const DrawCall &call, const GuestMemory &memory) {
         // every pixel of what it clears: nothing needs loading for it.
         std::uint32_t overwritten = 0u;
         static const bool no_clear_load = portablekit::env("NO_CLEAR_LOAD") != nullptr;
-        if (call.clear_mode && call.through && call.primitive == PrimitiveType::Sprites && !no_clear_load &&
-            !perf::alternate_off(perf::NewPath::ClearLoad) && call.viewport.scissor_x1 == 0u &&
-            call.viewport.scissor_y1 == 0u && call.viewport.scissor_x2 >= kPspWidth - 1u &&
-            call.viewport.scissor_y2 >= kPspHeight - 1u && call.vertices.size() == 2u) {
-            const Vertex &a = call.vertices[0];
-            const Vertex &b = call.vertices[1];
-            const bool covers = std::min(a.position[0], b.position[0]) <= 0.0f &&
-                                std::min(a.position[1], b.position[1]) <= 0.0f &&
-                                std::max(a.position[0], b.position[0]) >= static_cast<float>(kPspWidth) &&
-                                std::max(a.position[1], b.position[1]) >= static_cast<float>(kPspHeight);
-            if (covers && call.indices.empty()) {
-                if ((call.clear_flags & 3u) == 3u) overwritten |= 1u;
-                if ((call.clear_flags & 4u) != 0u) overwritten |= 2u;
-            }
+        if (!no_clear_load && !perf::alternate_off(perf::NewPath::ClearLoad) && clears_screen(call)) {
+            if ((call.clear_flags & 3u) == 3u) overwritten |= 1u;
+            if ((call.clear_flags & 4u) != 0u) overwritten |= 2u;
         }
         impl.begin_pass(call.target.color_address, overwritten);
         if (!impl.pass_active) return;
@@ -7005,6 +6996,11 @@ void VulkanRenderer::submit(const DrawCall &call, const GuestMemory &memory) {
             impl.snapshot_guest_words(memory, call.target.color_address, drawn);
         drawn.last_drawn_frame = impl.frames;
         drawn.draw_serial = ++impl.target_draw_counter;
+        if (call.clear_mode) {
+            if ((call.clear_flags & 1u) != 0u && clears_screen(call)) drawn.view = false;
+        } else if (!call.through || (framebuffer_source.target != nullptr && framebuffer_source.target->view)) {
+            drawn.view = true;
+        }
     }
     // The GE viewport maps normalised device coordinates onto the screen as
     //   screen = ndc * scale + offset - region_offset
@@ -7510,6 +7506,8 @@ void VulkanRenderer::Impl::finish_interpolated_frame(VkImage source, std::uint32
     }
     interpolation::mark_eligible(frame.summaries, displayed, cut_thresholds.orthographic);
     frame.displayed = displayed;
+    const auto shown = targets.find(displayed);
+    frame.flat = shown != targets.end() && !shown->second.view;
     frame.moment_us = moment_us;
     frame.valid = true;
     std::swap(older_frame, newer_frame);
@@ -7734,6 +7732,7 @@ bool VulkanRenderer::Impl::present_between(const pacing::PresentClock::Present &
         }
     }
     ui_draw_data = frame_ui;
+    show_flat = image == older_image.color ? older_frame.flat : newer_frame.flat;
     submit_and_present(commands, fence, image, true, false);
     // <prefix>_INTERPOLATION_EXTRA_MS: busy CPU time added to each blended
     // present, to try the step-down on a fast machine as if it were a slow one.
@@ -8586,6 +8585,7 @@ bool VulkanRenderer::present(std::uint32_t display_address,
     VkImage source = displayed != impl.targets.end() ? displayed->second.color : VK_NULL_HANDLE;
     impl.presented_target = displayed != impl.targets.end() ? displayed->first : 0u;
     if (impl.holding) source = impl.held.color;
+    else impl.show_flat = displayed != impl.targets.end() && !displayed->second.view;
     const std::chrono::steady_clock::time_point now = std::chrono::steady_clock::now();
     // <prefix>_FRAME_RATE_CYCLE=30,60,90: the frame rate moves to the next one
     // listed every <prefix>_FRAME_RATE_CYCLE_SECONDS (default 10), so one run

@@ -28,6 +28,8 @@ enum class PresentMode { Fifo, Mailbox, Immediate };
 // black bars, Stretch fills the window by stretching it, and Fill gives the
 // game the window's shape: its view widens or narrows to match (the vertical
 // field of view stays), and all 2D layers scale together to fill the window.
+// A picture without that view (a menu, a cutscene, a movie) keeps the PSP's
+// shape, all of its layers together.
 enum class Aspect { Original, Stretch, Fill };
 enum class PerfDisplay { Off, Overlay, OverlayAndLog, Log, Fps };
 enum class RightStick { Camera, DPad, Off };
