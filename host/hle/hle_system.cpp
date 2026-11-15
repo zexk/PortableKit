@@ -12,6 +12,7 @@
 
 #include <array>
 #include <chrono>
+#include <cstdio>
 #include <cstring>
 #include <ctime>
 #include <iostream>
@@ -390,6 +391,27 @@ void rtc_unverified(const char *name) {
 // A date that does not exist: what the library answers has not been traced.
 constexpr std::uint32_t kRtcInvalidDate = 0xFFFFFFFFu;
 
+// Seconds east of UTC of the host's time zone at a tick.
+std::int64_t local_offset_seconds(std::uint64_t tick) {
+    const auto seconds = static_cast<std::time_t>(tick > rtc::kUnixEpochTick ? (tick - rtc::kUnixEpochTick) /
+                                                                                  rtc::kTicksPerSecond
+                                                                            : 0u);
+    std::tm local{};
+    std::tm utc{};
+#if defined(_WIN32)
+    localtime_s(&local, &seconds);
+    gmtime_s(&utc, &seconds);
+#else
+    localtime_r(&seconds, &local);
+    gmtime_r(&seconds, &utc);
+#endif
+    // The two dates are at most a day apart.
+    const int days = local.tm_year != utc.tm_year ? (local.tm_year > utc.tm_year ? 1 : -1)
+                                                  : local.tm_yday - utc.tm_yday;
+    return ((days * 24 + local.tm_hour - utc.tm_hour) * 60 + local.tm_min - utc.tm_min) * 60 + local.tm_sec -
+           utc.tm_sec;
+}
+
 void register_rtc_calendar(HleRegistrar &hle) {
     // sceRtcGetTick(const ScePspDateTime *, u64 *tick). Vice City Stories and
     // Chinatown Wars import it and CompareTick, Chinatown Wars GetCurrentClock;
@@ -468,6 +490,41 @@ void register_rtc_calendar(HleRegistrar &hle) {
         if (arg(ctx, 1) != 0u)
             rt.memory().store32(arg(ctx, 1),
                                 static_cast<std::uint32_t>((*tick - rtc::kUnixEpochTick) / rtc::kTicksPerSecond));
+        kernel().finish(ctx, 0u);
+    });
+    // sceRtcSetTime_t(ScePspDateTime *, u32 time): the date of a time in
+    // seconds since 1970-01-01. Portable Ops Plus dates its online news with
+    // it, then with ConvertUtcToLocalTime.
+    hle.add("sceRtc", "sceRtcSetTime_t", [](Runtime &rt, AllegrexContext &ctx) {
+        write_date(rt.memory(), arg(ctx, 0),
+                   rtc::from_tick(rtc::kUnixEpochTick + static_cast<std::uint64_t>(arg(ctx, 1)) * rtc::kTicksPerSecond));
+        kernel().finish(ctx, 0u);
+    });
+    // sceRtcConvertUtcToLocalTime(const u64 *utc, u64 *local): in the host's
+    // time zone.
+    hle.add("sceRtc", "sceRtcConvertUtcToLocalTime", [](Runtime &rt, AllegrexContext &ctx) {
+        const std::uint64_t utc = load_tick(rt.memory(), arg(ctx, 0));
+        const auto offset = local_offset_seconds(utc) * static_cast<std::int64_t>(rtc::kTicksPerSecond);
+        store64(rt.memory(), arg(ctx, 1), static_cast<std::uint64_t>(static_cast<std::int64_t>(utc) + offset));
+        kernel().finish(ctx, 0u);
+    });
+    // sceRtcFormatRFC3339LocalTime(char *out, const u64 *utc, now when null):
+    // "YYYY-MM-DDThh:mm:ss.cc+hh:mm" in the host's time zone. The fraction's
+    // two digits are an assumption; no game has been seen showing the text.
+    hle.add("sceRtc", "sceRtcFormatRFC3339LocalTime", [](Runtime &rt, AllegrexContext &ctx) {
+        rtc_unverified("sceRtcFormatRFC3339LocalTime");
+        const std::uint64_t utc =
+            arg(ctx, 1) != 0u ? load_tick(rt.memory(), arg(ctx, 1)) : rtc::kUnixEpochTick + guest_unix_us();
+        const std::int64_t offset = local_offset_seconds(utc);
+        const rtc::DateTime date = rtc::from_tick(
+            static_cast<std::uint64_t>(static_cast<std::int64_t>(utc) +
+                                       offset * static_cast<std::int64_t>(rtc::kTicksPerSecond)));
+        const std::int64_t minutes = (offset < 0 ? -offset : offset) / 60;
+        char text[64];
+        std::snprintf(text, sizeof(text), "%04d-%02d-%02dT%02d:%02d:%02d.%02u%c%02d:%02d", date.year, date.month,
+                      date.day, date.hour, date.minute, date.second, date.microsecond / 10'000u,
+                      offset < 0 ? '-' : '+', static_cast<int>(minutes / 60), static_cast<int>(minutes % 60));
+        write_cstring(rt.memory(), arg(ctx, 0), text, 32u);
         kernel().finish(ctx, 0u);
     });
     hle.add("sceRtc", "sceRtcGetTickResolution", [](Runtime &, AllegrexContext &ctx) {

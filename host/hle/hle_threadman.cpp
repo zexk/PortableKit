@@ -163,6 +163,19 @@ void register_threads(HleRegistrar &hle) {
             ++thread->wakeup_count;
         kernel().finish(ctx, 0u);
     });
+    // sceKernelCancelWakeupThread(uid, 0 for the caller): forgets the wakeups
+    // waiting for the thread's next sleep and answers how many there were.
+    hle.add("ThreadManForUser", "sceKernelCancelWakeupThread", [](Runtime &, AllegrexContext &ctx) {
+        const SceUID uid = as_signed(arg(ctx, 0));
+        Thread *thread = uid == 0 ? kernel().current_thread() : kernel().find_thread(uid);
+        if (thread == nullptr) {
+            kernel().finish(ctx, error::kUnknownThid);
+            return;
+        }
+        const std::uint32_t count = thread->wakeup_count;
+        thread->wakeup_count = 0u;
+        kernel().finish(ctx, count);
+    });
 
     const auto delay = [](Runtime &, AllegrexContext &ctx) { kernel().delay_current(ctx, arg(ctx, 0)); };
     hle.add("ThreadManForUser", "sceKernelDelayThread", delay);

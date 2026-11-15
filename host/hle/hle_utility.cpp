@@ -432,6 +432,15 @@ void register_msg_dialog(HleRegistrar &hle) {
         if (!msg_dialog().shutdown()) std::cerr << "[msgdialog] ShutdownStart before the dialog finished\n";
         kernel().finish(ctx, 0u);
     });
+
+    hle.add("sceUtility", "sceUtilityMsgDialogAbort", [](Runtime &, AllegrexContext &ctx) {
+        if (!msg_dialog().active()) {
+            kernel().finish(ctx, kErrorUtilityInvalidStatus);
+            return;
+        }
+        msg_dialog().abort();
+        kernel().finish(ctx, 0u);
+    });
 }
 
 } // namespace

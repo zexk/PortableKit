@@ -155,6 +155,8 @@ sceHttp,0xF1657B22,sceHttpLoadSystemCookie
 sceHttp,0x47940436,sceHttpSetResolveTimeOut
 sceHttp,0xB3FAF831,sceHttpsDisableOption
 sceHttp,0xBAC31BF1,sceHttpsEnableOption
+sceHttp,0x03D9526F,sceHttpSetResolveRetry
+sceHttp,0xD081EC8F,sceHttpGetNetworkErrno
 sceParseUri,0x568518C9,sceUriParse
 sceParseUri,0x7EE318AF,sceUriBuild
 sceParseUri,0x49E950EC,sceUriEscape
@@ -328,6 +330,9 @@ sceRtc,0xCF3A2CA8,sceRtcTickAddWeeks
 sceRtc,0xC41C2853,sceRtcGetTickResolution
 sceRtc,0xE1C93E47,sceRtcGetTime64_t
 sceRtc,0x27C4594C,sceRtcGetTime_t
+sceRtc,0x3A807CC8,sceRtcSetTime_t
+sceRtc,0x34885E0D,sceRtcConvertUtcToLocalTime
+sceRtc,0x27F98543,sceRtcFormatRFC3339LocalTime
 sceSasCore,0x019B25EB,__sceSasSetADSR
 sceSasCore,0x07F58C24,__sceSasGetAllEnvelopeHeights
 sceSasCore,0x267A6DD2,__sceSasRevParam
@@ -529,6 +534,7 @@ ThreadManForUser,0x2C34E053,sceKernelReleaseWaitThread
 ThreadManForUser,0x64D4540E,sceKernelReferThreadProfiler
 ThreadManForUser,0x8218B4DD,sceKernelReferGlobalProfiler
 ThreadManForUser,0xD13BDE95,sceKernelCheckThreadStack
+ThreadManForUser,0xFCCFAD26,sceKernelCancelWakeupThread
 UtilsForUser,0x27CC57F0,sceKernelLibcTime
 UtilsForUser,0x3EE30821,sceKernelDcacheWritebackRange
 UtilsForUser,0x6AD345D7,sceKernelSetGPO

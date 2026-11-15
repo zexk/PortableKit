@@ -1132,7 +1132,7 @@ void register_net_infra(HleRegistrar &hle) {
                              "sceHttpSetRecvTimeOut", "sceHttpSetSendTimeOut", "sceHttpSetConnectTimeOut",
                              "sceHttpDisableCookie", "sceHttpDisableCache", "sceHttpDisableAuth",
                              "sceHttpSetRedirectCallback", "sceHttpAbortRequest", "sceHttpSetResolveTimeOut",
-                             "sceHttpsEnableOption", "sceHttpsDisableOption"})
+                             "sceHttpSetResolveRetry", "sceHttpsEnableOption", "sceHttpsDisableOption"})
         hle.add("sceHttp", name, [name](Runtime &, AllegrexContext &ctx) { done(ctx, name, 2, 0u); });
 
     // --- sceParseUri -----------------------------------------------------
@@ -1354,6 +1354,11 @@ void register_net_infra(HleRegistrar &hle) {
     hle.add("sceHttp", "sceHttpGetNetworkPspError", [](Runtime &rt, AllegrexContext &ctx) {
         if (arg(ctx, 1) != 0u) rt.memory().store32(arg(ctx, 1), 0u);
         done(ctx, "sceHttpGetNetworkPspError", 2, 0u);
+    });
+    // (request, int *errno)
+    hle.add("sceHttp", "sceHttpGetNetworkErrno", [](Runtime &rt, AllegrexContext &ctx) {
+        if (arg(ctx, 1) != 0u) rt.memory().store32(arg(ctx, 1), 0u);
+        done(ctx, "sceHttpGetNetworkErrno", 2, 0u);
     });
 }
 

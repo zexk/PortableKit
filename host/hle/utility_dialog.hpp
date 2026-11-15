@@ -55,6 +55,11 @@ public:
         return quit;
     }
 
+    // Abort: a dialog not yet quit quits now, for the guest to shut it down.
+    void abort() noexcept {
+        if (status_ == dialog_status::kInit || status_ == dialog_status::kVisible) status_ = dialog_status::kQuit;
+    }
+
 private:
     std::uint32_t status_{dialog_status::kNone};
 };
