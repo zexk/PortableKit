@@ -214,9 +214,11 @@ sceNet,0x281928A9,sceNetTerm
 sceNet,0x39AF39A6,sceNetInit
 sceNet,0x50647530,sceNetFreeThreadinfo
 sceNet,0x89360950,sceNetEtherNtostr
+sceNet,0xAD6844C6,sceNetThreadAbort
 sceNetAdhoc,0x157E6225,sceNetAdhocPtpClose
 sceNetAdhoc,0x4DA4C788,sceNetAdhocPtpSend
 sceNetAdhoc,0x6F92741B,sceNetAdhocPdpCreate
+sceNetAdhoc,0x73BFD52D,sceNetAdhocSetSocketAlert
 sceNetAdhoc,0x7F27BB5E,sceNetAdhocPdpDelete
 sceNetAdhoc,0x877F6D66,sceNetAdhocPtpOpen
 sceNetAdhoc,0x8BEA2B3E,sceNetAdhocPtpRecv

@@ -231,6 +231,7 @@ struct State {
     std::map<std::uint32_t, PdpSocket> pdp;
     std::map<std::uint32_t, PtpSocket> ptp;
     NetconfState netconf;
+    bool scanning{};  // from sceNetAdhocctlScan until its end reaches the handlers
     bool hooked{};
 };
 
@@ -281,9 +282,11 @@ void pump_events() {
             notify_handlers(kEventDisconnect, 0u);
             break;
         case adhoc::CtlEvent::ScanComplete:
+            state().scanning = false;
             notify_handlers(kEventScan, 0u);
             break;
         case adhoc::CtlEvent::Error:
+            state().scanning = false;
             if (state().netconf.joining) {
                 finish_netconf(err::kCtlTimeout);
                 notify_handlers(kEventError, err::kCtlTimeout);
@@ -308,6 +311,9 @@ void register_net(HleRegistrar &hle) {
     hle.add("sceNet", "sceNetTerm", [](Runtime &, AllegrexContext &ctx) { done(ctx, "sceNetTerm", 0, 0u); });
     hle.add("sceNet", "sceNetFreeThreadinfo",
             [](Runtime &, AllegrexContext &ctx) { done(ctx, "sceNetFreeThreadinfo", 1, 0u); });
+    // sceNetThreadAbort(thid): ends a network call the thread is blocked in.
+    // Every call here gives up on its own when its socket goes away.
+    hle.add("sceNet", "sceNetThreadAbort", [](Runtime &, AllegrexContext &ctx) { done(ctx, "sceNetThreadAbort", 1, 0u); });
     hle.add("sceNet", "sceNetGetLocalEtherAddr", [](Runtime &rt, AllegrexContext &ctx) {
         if (arg(ctx, 0) != 0u) write_mac(rt.memory(), arg(ctx, 0), own_mac());
         done(ctx, "sceNetGetLocalEtherAddr", 1, 0u, adhoc::format_mac(own_mac()));
@@ -375,8 +381,23 @@ void register_adhocctl(HleRegistrar &hle) {
         const bool found = state().handlers.erase(arg(ctx, 0)) != 0u;
         done(ctx, "sceNetAdhocctlDelHandler", 1, found ? 0u : err::kCtlIdNotFound);
     });
+    // sceNetAdhocctlGetState(int *state): 0 disconnected, 1 in a group, 2
+    // scanning. Metal Gear Solid: Portable Ops leaves a group only when this
+    // says 1, and at network shutdown waits for it to say 0.
+    hle.add("sceNetAdhocctl", "sceNetAdhocctlGetState", [](Runtime &rt, AllegrexContext &ctx) {
+        constexpr std::uint32_t kDisconnected = 0u, kConnected = 1u, kScanning = 2u;
+        pump_events();
+        if (!state().ctl_initialized) return done(ctx, "sceNetAdhocctlGetState", 1, err::kCtlNotInitialized);
+        if (arg(ctx, 0) == 0u) return done(ctx, "sceNetAdhocctlGetState", 1, err::kCtlInvalidArg);
+        const std::uint32_t value = Client::get().in_group() ? kConnected
+                                    : state().scanning      ? kScanning
+                                                            : kDisconnected;
+        rt.memory().store32(arg(ctx, 0), value);
+        done(ctx, "sceNetAdhocctlGetState", 1, 0u, "state " + std::to_string(value));
+    });
     hle.add("sceNetAdhocctl", "sceNetAdhocctlScan", [](Runtime &, AllegrexContext &ctx) {
         if (!state().ctl_initialized) return done(ctx, "sceNetAdhocctlScan", 0, err::kCtlNotInitialized);
+        state().scanning = true;
         Client::get().scan();
         done(ctx, "sceNetAdhocctlScan", 0, 0u);
     });
@@ -562,6 +583,13 @@ void register_pdp(HleRegistrar &hle) {
         const auto id = static_cast<std::uint32_t>(handle);
         state().pdp[id] = PdpSocket{handle, port, buffer};
         done(ctx, name, 4, id);
+    });
+    // sceNetAdhocSetSocketAlert(id, flags): wakes calls blocked on the socket.
+    // Games set it right before deleting the socket, which ends those calls
+    // here anyway.
+    hle.add("sceNetAdhoc", "sceNetAdhocSetSocketAlert", [](Runtime &, AllegrexContext &ctx) {
+        const bool known = find_pdp(arg(ctx, 0)) != nullptr || find_ptp(arg(ctx, 0)) != nullptr;
+        done(ctx, "sceNetAdhocSetSocketAlert", 2, known ? 0u : err::kInvalidSocketId);
     });
     hle.add("sceNetAdhoc", "sceNetAdhocPdpDelete", [](Runtime &, AllegrexContext &ctx) {
         PdpSocket *socket = find_pdp(arg(ctx, 0));
@@ -863,27 +891,82 @@ void register_ptp(HleRegistrar &hle) {
 
 // sceNetAdhocDiscover ----------------------------------------------------------
 //
-// Discovery finds a nearby console for a one-to-one session with no group; it
-// is not part of joining a gathering hall. Starting it succeeds, and it ends at
-// once with nothing found.
+// Discovery finds one other console for a one-to-one session. Its parameter
+// (SceNetAdhocDiscoverParam) is u32 mode, char group[8], u32 timeout (seconds,
+// as read from one game; 0: none), u32 result. Here it joins that group on the
+// server and ends when another player is in it (result 2, peer found), when
+// the timeout passes (0, none found) or on Stop (1, cancelled). The group
+// stays joined, so the game finds its partner with sceNetAdhocctlGetPeerList
+// as on a PSP. Metal Gear Solid: Portable Ops does exactly that ("mpodsc",
+// 60 s) before it trades soldiers over PTP.
+struct Discover {
+    std::uint32_t status{};  // 0 none, 1 in progress, 2 completed
+    std::uint32_t params{};
+    std::optional<std::uint64_t> deadline_us;
+};
+
+Discover &discover() {
+    static Discover value;
+    return value;
+}
+
+void finish_discover(psprecomp::GuestMemory &memory, std::uint32_t result) {
+    constexpr std::uint32_t kResultOffset = 16u;
+    Discover &d = discover();
+    if (d.status != 1u) return;
+    d.status = 2u;
+    if (d.params != 0u) memory.store32(d.params + kResultOffset, result);
+    trace_line("discover finished, result " + std::to_string(result));
+}
+
+// Moves a discovery in progress on: done once someone else is in the group.
+void update_discover(psprecomp::GuestMemory &memory) {
+    constexpr std::uint32_t kResultNoPeer = 0u, kResultPeerFound = 2u;
+    pump_events();
+    Discover &d = discover();
+    if (d.status != 1u) return;
+    if (Client::get().in_group() && !Client::get().peers().empty()) return finish_discover(memory, kResultPeerFound);
+    if (d.deadline_us && kernel().now_us() >= *d.deadline_us) finish_discover(memory, kResultNoPeer);
+}
+
 void register_discover(HleRegistrar &hle) {
-    constexpr std::uint32_t kDiscoverNone = 0u;
-    constexpr std::uint32_t kDiscoverCompleted = 2u;
-    static std::uint32_t status = kDiscoverNone;
-    hle.add("sceNetAdhocDiscover", "sceNetAdhocDiscoverInitStart", [](Runtime &, AllegrexContext &ctx) {
-        status = kDiscoverCompleted;
-        done(ctx, "sceNetAdhocDiscoverInitStart", 1, 0u);
+    hle.add("sceNetAdhocDiscover", "sceNetAdhocDiscoverInitStart", [](Runtime &rt, AllegrexContext &ctx) {
+        constexpr std::uint32_t kResultNoPeer = 0u;
+        auto &memory = rt.memory();
+        const std::uint32_t params = arg(ctx, 0);
+        if (params == 0u) return done(ctx, "sceNetAdhocDiscoverInitStart", 1, err::kInvalidArg);
+        Discover &d = discover();
+        const std::string group = read_cstring(memory, params + 4u, 8u);
+        const std::uint32_t timeout_s = memory.load32(params + 12u);
+        d = Discover{1u, params, timeout_s != 0u ? std::optional<std::uint64_t>(kernel().now_us() +
+                                                                               timeout_s * 1000000ull)
+                                                 : std::nullopt};
+        ensure_hooked();
+        if (!settings::current().adhoc || adhoc_server_address().empty()) {
+            Client::log("[adhoc] no server is set up (menu: Network); discovery finds no one", true);
+            finish_discover(memory, kResultNoPeer);
+        } else {
+            start_client();
+            Client::get().join(group);
+        }
+        done(ctx, "sceNetAdhocDiscoverInitStart", 1, 0u,
+             "group \"" + group + "\" timeout " + std::to_string(timeout_s) + "s");
     });
-    hle.add("sceNetAdhocDiscover", "sceNetAdhocDiscoverUpdate",
-            [](Runtime &, AllegrexContext &ctx) { done(ctx, "sceNetAdhocDiscoverUpdate", 0, 0u); });
-    hle.add("sceNetAdhocDiscover", "sceNetAdhocDiscoverGetStatus",
-            [](Runtime &, AllegrexContext &ctx) { done(ctx, "sceNetAdhocDiscoverGetStatus", 0, status); });
-    hle.add("sceNetAdhocDiscover", "sceNetAdhocDiscoverStop", [](Runtime &, AllegrexContext &ctx) {
-        status = kDiscoverNone;
+    hle.add("sceNetAdhocDiscover", "sceNetAdhocDiscoverUpdate", [](Runtime &rt, AllegrexContext &ctx) {
+        update_discover(rt.memory());
+        kernel().finish(ctx, 0u);
+    });
+    hle.add("sceNetAdhocDiscover", "sceNetAdhocDiscoverGetStatus", [](Runtime &rt, AllegrexContext &ctx) {
+        update_discover(rt.memory());
+        kernel().finish(ctx, discover().status);
+    });
+    hle.add("sceNetAdhocDiscover", "sceNetAdhocDiscoverStop", [](Runtime &rt, AllegrexContext &ctx) {
+        constexpr std::uint32_t kResultCancelled = 1u;
+        finish_discover(rt.memory(), kResultCancelled);
         done(ctx, "sceNetAdhocDiscoverStop", 0, 0u);
     });
     hle.add("sceNetAdhocDiscover", "sceNetAdhocDiscoverTerm", [](Runtime &, AllegrexContext &ctx) {
-        status = kDiscoverNone;
+        discover() = Discover{};
         done(ctx, "sceNetAdhocDiscoverTerm", 0, 0u);
     });
 }
