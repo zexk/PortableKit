@@ -1046,6 +1046,43 @@ void register_netconf(HleRegistrar &hle) {
     });
 }
 
+// sceUtilityGameSharing ----------------------------------------------------------
+//
+// Game Sharing sends a game to PSPs without its disc. Here every player runs
+// the game already, so the dialog ends at once, cancelled: the usual result
+// (+0x1C) is 1 and the sharing result (+0x4C) -1. Metal Gear Solid: Portable
+// Ops waits for a nonzero sharing result and treats a negative one as a
+// failed send. The ad hoc matching library it starts first only initialises.
+void register_game_sharing(HleRegistrar &hle) {
+    constexpr std::uint32_t kSharingResult = 0x4Cu;
+    static DialogLifecycle dialog;
+    hle.add("sceNetAdhocMatching", "sceNetAdhocMatchingInit",
+            [](Runtime &, AllegrexContext &ctx) { done(ctx, "sceNetAdhocMatchingInit", 1, 0u); });
+    hle.add("sceNetAdhocMatching", "sceNetAdhocMatchingTerm",
+            [](Runtime &, AllegrexContext &ctx) { done(ctx, "sceNetAdhocMatchingTerm", 0, 0u); });
+    hle.add("sceUtility", "sceUtilityGameSharingInitStart", [](Runtime &rt, AllegrexContext &ctx) {
+        const std::uint32_t params = arg(ctx, 0);
+        if (params == 0u) return done(ctx, "sceUtilityGameSharingInitStart", 1, err::kInvalidArg);
+        if (dialog.active()) return done(ctx, "sceUtilityGameSharingInitStart", 1, kErrorUtilityInvalidStatus);
+        Client::log("[adhoc] Game Sharing is not needed here, every player runs the game: cancelled", true);
+        rt.memory().store32(params + dialog_common::kResultOffset, kNetconfResultCancelled);
+        rt.memory().store32(params + kSharingResult, 0xFFFFFFFFu);
+        dialog.start();
+        done(ctx, "sceUtilityGameSharingInitStart", 1, 0u);
+    });
+    hle.add("sceUtility", "sceUtilityGameSharingUpdate", [](Runtime &, AllegrexContext &ctx) {
+        (void)dialog.poll();
+        kernel().finish(ctx, 0u);
+    });
+    hle.add("sceUtility", "sceUtilityGameSharingGetStatus",
+            [](Runtime &, AllegrexContext &ctx) { kernel().finish(ctx, dialog.poll()); });
+    hle.add("sceUtility", "sceUtilityGameSharingShutdownStart", [](Runtime &, AllegrexContext &ctx) {
+        if (!dialog.active()) return done(ctx, "sceUtilityGameSharingShutdownStart", 0, kErrorUtilityInvalidStatus);
+        (void)dialog.shutdown();
+        done(ctx, "sceUtilityGameSharingShutdownStart", 0, 0u);
+    });
+}
+
 } // namespace
 
 void adhoc_apply_settings(bool switch_now) {
@@ -1076,6 +1113,7 @@ void register_adhoc(HleRegistrar &hle) {
     register_ptp(hle);
     register_discover(hle);
     register_netconf(hle);
+    register_game_sharing(hle);
 }
 
 } // namespace portablekit
