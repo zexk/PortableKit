@@ -416,6 +416,12 @@ const std::vector<Field> &fields() {
          },
          [](const Settings &s) { return s.adhoc_nickname; },
          [](Settings &s, const char *t) { s.adhoc_nickname = t; }},
+        {"network.gps", "GPS",
+         [](Settings &s, const std::string &t) {
+             s.gps_location = t;
+             return true;
+         },
+         [](const Settings &s) { return s.gps_location; }, [](Settings &s, const char *t) { s.gps_location = t; }},
         {"network.mac", "ADHOC_MAC",
          [](Settings &s, const std::string &t) {
              s.adhoc_mac = t;

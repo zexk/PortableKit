@@ -149,6 +149,7 @@ struct Settings {
     std::string adhoc_mac;             // this player's virtual MAC, made up on first use
     std::vector<std::string> adhoc_recent;  // sessions joined lately, the latest first
     std::uint32_t adhoc_host_port{27312};   // the built-in server's adhocctl port; the relay is on the next
+    std::string gps_location;          // "latitude, longitude" for a game's GPS receiver; empty: none plugged in
 
     // Interface
     bool menu_pause{true};             // opening the menu pauses the game

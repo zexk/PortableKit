@@ -587,3 +587,14 @@ sceNetResolver,0x244172AF,sceNetResolverCreate
 sceNetResolver,0x224C5F44,sceNetResolverStartNtoA
 scePspNpDrm_user,0xA1336091,sceNpDrmSetLicenseeKey
 scePspNpDrm_user,0x08D98894,sceNpDrmEdataSetupKey
+sceUsb,0xAE5DE6AF,sceUsbStart
+sceUsb,0xC2464FA0,sceUsbStop
+sceUsb,0xC21645A4,sceUsbGetState
+sceUsb,0x586DB82C,sceUsbActivate
+sceUsb,0xC572A9C8,sceUsbDeactivate
+sceUsbGps,0x9F267D34,sceUsbGpsOpen
+sceUsbGps,0x6EED4811,sceUsbGpsClose
+sceUsbGps,0x7C16AC3A,sceUsbGpsGetState
+sceUsbGps,0x934EC2B2,sceUsbGpsGetData
+sceUtility,0x0D5BC6D2,sceUtilityLoadUsbModule
+sceUtility,0xF64910F0,sceUtilityUnloadUsbModule

@@ -97,6 +97,7 @@ void install_system(Runtime &runtime, const psprecomp::Elf32Image &elf, const Pr
     register_font(hle);
     register_utility(hle, paths.memory_stick);
     register_adhoc(hle);
+    register_usb(hle);
     if (const ExtraHleHook hook = active_register_extra_hle(); hook != nullptr) hook(hle);
     // Extension modules the build linked in (docs/HLE_EXTENSIONS.md): after
     // everything above, so they fill in what it leaves and override only what

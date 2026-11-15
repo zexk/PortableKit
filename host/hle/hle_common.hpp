@@ -101,6 +101,7 @@ void register_font(HleRegistrar &hle);
 void register_utility(HleRegistrar &hle, const std::filesystem::path &memory_stick);
 void register_savedata(HleRegistrar &hle, const std::filesystem::path &memory_stick);
 void register_adhoc(HleRegistrar &hle);
+void register_usb(HleRegistrar &hle);
 
 #if defined(PORTABLEKIT_HAS_RENDERER)
 namespace gpu { class VulkanRenderer; }

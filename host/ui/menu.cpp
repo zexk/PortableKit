@@ -1396,6 +1396,13 @@ void Menu::network() {
         adhoc_apply_settings();
     }
 
+    section("GPS receiver");
+    if (text_row("gps", "Location", s.gps_location, 40u, true,
+                 [](char32_t c) { return (c >= U'0' && c <= U'9') || c == U'.' || c == U'-' || c == U',' || c == U' '; },
+                 options_for("network.gps", "Where the game's GPS receiver says you are: latitude and longitude in "
+                                            "degrees, such as 35.68, 139.69. Empty: no receiver is plugged in.")))
+        settings::save();
+
     section("Status");
     info_row("Connection", connection_text(d));
     if (adhoc_hosting()) {
@@ -1478,7 +1485,7 @@ void Menu::network() {
 
     ImGui::Dummy({0.0f, font_gap()});
     if (button_row("Restore network defaults",
-                   {false, {}, "Ad hoc play off, no server and no nickname. Your address stays."})) {
+                   {false, {}, "Ad hoc play off, no server, no nickname and no GPS location. Your address stays."})) {
         const settings::Settings &defaults = settings::defaults();
         const auto restore = [&](const char *key, auto &value, const auto &fallback) {
             if (settings::overridden_by(key).empty()) value = fallback;
@@ -1486,6 +1493,7 @@ void Menu::network() {
         restore("network.adhoc", s.adhoc, defaults.adhoc);
         restore("network.server", s.adhoc_server, defaults.adhoc_server);
         restore("network.nickname", s.adhoc_nickname, defaults.adhoc_nickname);
+        restore("network.gps", s.gps_location, defaults.gps_location);
         settings::save();
         adhoc_apply_settings();
     }
