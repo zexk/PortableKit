@@ -80,6 +80,7 @@ set(PORTABLEKIT_HOST_SOURCES
     host/adhoc/discovery.cpp
     host/adhoc/host.cpp
     host/adhoc/server.cpp
+    host/platform/wifi_scan.cpp
     host/save_data/aes128.cpp
     host/save_data/param_sfo.cpp
     host/save_data/savedata_crypto.cpp

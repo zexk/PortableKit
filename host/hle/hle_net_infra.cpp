@@ -19,6 +19,7 @@
 
 #include "adhoc/discovery.hpp"
 #include "adhoc/sockets.hpp"
+#include "platform/wifi_scan.hpp"
 
 #include "psprecomp/common.hpp"
 
@@ -61,13 +62,17 @@ constexpr std::uint32_t kHttpUnknownId = 0x80431007u;
 
 // pspnet_apctl.h
 constexpr std::uint32_t kApctlDisconnected = 0u;
+constexpr std::uint32_t kApctlScanning = 1u;
 constexpr std::uint32_t kApctlJoining = 2u;
 constexpr std::uint32_t kApctlGettingIp = 3u;
 constexpr std::uint32_t kApctlGotIp = 4u;
 constexpr std::uint32_t kApctlEventConnectRequest = 0u;
+constexpr std::uint32_t kApctlEventScanRequest = 1u;
+constexpr std::uint32_t kApctlEventScanComplete = 2u;
 constexpr std::uint32_t kApctlEventEstablished = 3u;
 constexpr std::uint32_t kApctlEventGetIp = 4u;
 constexpr std::uint32_t kApctlEventDisconnectRequest = 5u;
+constexpr std::uint32_t kApctlInvalidCode = 0x80410A02u;  // not traced
 
 bool tracing() {
     static const bool on = [] {
@@ -358,6 +363,28 @@ void apctl_move(std::uint32_t to, std::uint32_t event) {
         call.argument_count = 5u;
         kernel().queue_interrupt(std::move(call));
     }
+}
+
+// The access point scan (sceNetApctlScanUser): the host's Wi-Fi networks
+// (platform/wifi_scan.hpp), found on a thread of its own since a fresh scan
+// takes seconds, then reported as on a PSP: scanning, then scan complete.
+struct ApScan {
+    std::future<std::vector<platform::AccessPoint>> pending;
+    std::vector<platform::AccessPoint> found;
+    bool hooked{};
+};
+
+ApScan &ap_scan() {
+    static ApScan value;
+    return value;
+}
+
+void finish_ap_scan() {
+    ApScan &scan = ap_scan();
+    if (!scan.pending.valid() || scan.pending.wait_for(std::chrono::seconds(0)) != std::future_status::ready) return;
+    scan.found = scan.pending.get();
+    trace("access point scan found " + std::to_string(scan.found.size()));
+    apctl_move(kApctlDisconnected, kApctlEventScanComplete);
 }
 
 void apctl_connect() {
@@ -1074,6 +1101,60 @@ void register_net_infra(HleRegistrar &hle) {
     hle.add("sceNetApctl", "sceNetApctlDisconnect", [](Runtime &, AllegrexContext &ctx) {
         if (state().apctl_state != kApctlDisconnected) apctl_move(kApctlDisconnected, kApctlEventDisconnectRequest);
         done(ctx, "sceNetApctlDisconnect", 0, 0u);
+    });
+    hle.add("sceNetApctl", "sceNetApctlScanUser", [](Runtime &, AllegrexContext &ctx) {
+        ApScan &scan = ap_scan();
+        if (scan.pending.valid()) return done(ctx, "sceNetApctlScanUser", 0, 0u, "already scanning");
+        if (!scan.hooked) {
+            scan.hooked = true;
+            kernel().add_vblank_hook(finish_ap_scan);
+        }
+        apctl_move(kApctlScanning, kApctlEventScanRequest);
+        scan.pending = std::async(std::launch::async, platform::scan_wifi);
+        done(ctx, "sceNetApctlScanUser", 0, 0u);
+    });
+    // (u32 *size, entries *): {next, id} per access point found. Without
+    // entries, the size they need.
+    hle.add("sceNetApctl", "sceNetApctlGetBSSDescIDListUser", [](Runtime &rt, AllegrexContext &ctx) {
+        constexpr std::uint32_t kEntrySize = 8u;
+        auto &memory = rt.memory();
+        const std::uint32_t size_address = arg(ctx, 0);
+        const std::uint32_t entries = arg(ctx, 1);
+        const auto found = static_cast<std::uint32_t>(ap_scan().found.size());
+        if (size_address == 0u) return done(ctx, "sceNetApctlGetBSSDescIDListUser", 2, kApctlInvalidCode);
+        const std::uint32_t count = entries == 0u ? found : std::min(found, memory.load32(size_address) / kEntrySize);
+        for (std::uint32_t i = 0; entries != 0u && i < count; ++i) {
+            const std::uint32_t entry = entries + i * kEntrySize;
+            memory.store32(entry, i + 1u < count ? entry + kEntrySize : 0u);
+            memory.store32(entry + 4u, i);
+        }
+        memory.store32(size_address, count * kEntrySize);
+        done(ctx, "sceNetApctlGetBSSDescIDListUser", 2, 0u, std::to_string(count) + " access points");
+    });
+    // (id, what, out): 0 BSSID, 1 SSID (32 bytes), 2 its length, 3 channel,
+    // 4 signal strength (one byte, 0 to 100), 5 security (0 none, 1 WEP, 2 WPA).
+    hle.add("sceNetApctl", "sceNetApctlGetBSSDescEntryUser", [](Runtime &rt, AllegrexContext &ctx) {
+        auto &memory = rt.memory();
+        const std::vector<platform::AccessPoint> &found = ap_scan().found;
+        const std::uint32_t out = arg(ctx, 2);
+        if (arg(ctx, 0) >= found.size() || out == 0u)
+            return done(ctx, "sceNetApctlGetBSSDescEntryUser", 3, kApctlInvalidCode);
+        const platform::AccessPoint &ap = found[arg(ctx, 0)];
+        switch (arg(ctx, 1)) {
+        case 0u:
+            for (std::uint32_t i = 0; i < 6u; ++i) memory.store8(out + i, ap.bssid[i]);
+            break;
+        case 1u:
+            for (std::uint32_t i = 0; i < 32u; ++i)
+                memory.store8(out + i, i < ap.ssid.size() ? static_cast<std::uint8_t>(ap.ssid[i]) : 0u);
+            break;
+        case 2u: memory.store32(out, static_cast<std::uint32_t>(ap.ssid.size())); break;
+        case 3u: memory.store32(out, ap.channel); break;
+        case 4u: memory.store8(out, ap.signal); break;
+        case 5u: memory.store32(out, !ap.privacy ? 0u : ap.wpa ? 2u : 1u); break;
+        default: return done(ctx, "sceNetApctlGetBSSDescEntryUser", 3, kApctlInvalidCode);
+        }
+        done(ctx, "sceNetApctlGetBSSDescEntryUser", 3, 0u);
     });
     hle.add("sceNetApctl", "sceNetApctlGetState", [](Runtime &rt, AllegrexContext &ctx) {
         if (arg(ctx, 0) != 0u) rt.memory().store32(arg(ctx, 0), state().apctl_state);

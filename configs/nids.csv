@@ -273,6 +273,9 @@ sceNetApctl,0xB3EDD0EC,sceNetApctlTerm
 sceNetApctl,0xE2F91F9B,sceNetApctlInit
 sceNetApctl,0xCFB957C6,sceNetApctlConnect
 sceNetApctl,0x5DEAC81B,sceNetApctlGetState
+sceNetApctl,0xE9B2E5E6,sceNetApctlScanUser
+sceNetApctl,0x6BDDCB8C,sceNetApctlGetBSSDescIDListUser
+sceNetApctl,0x04776994,sceNetApctlGetBSSDescEntryUser
 sceNetInet,0x17943399,sceNetInetInit
 sceNetInet,0x1A33F9AE,sceNetInetBind
 sceNetInet,0x2FE71FE7,sceNetInetSetsockopt
