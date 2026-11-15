@@ -166,8 +166,8 @@ void test_hashes(const fs::path &root) {
     quick.replace(quick.find("xxh64"), 5, "quick");
     make_pack(root / "quick" / kGame, quick);
     TexturePackCheck c = check_texture_pack(root / "quick", kGame);
-    check(c.found() && !c.ok() && c.problem.find("\"quick\" hash") != std::string::npos,
-          "hash = quick is refused with its reason");
+    check(c.ok() && c.hash == TexturePackHash::Quick && !c.ignore_address,
+          "quick packs are accepted and keep addresses like PPSSPP");
     std::string xxh32 = kIni;
     xxh32.replace(xxh32.find("xxh64"), 5, "xxh32");
     make_pack(root / "xxh32" / kGame, xxh32);
@@ -175,7 +175,46 @@ void test_hashes(const fs::path &root) {
     check(c.ok() && c.hash == TexturePackHash::Xxh32, "hash = xxh32 is accepted");
     make_pack(root / "nohash" / kGame, "[hashes]\n0000000022585cbda625131a = ui/capcom.png\n");
     c = check_texture_pack(root / "nohash", kGame);
-    check(!c.ok() && !c.problem.empty(), "an ini that names no hash is refused");
+    check(c.ok() && c.hash == TexturePackHash::Quick, "omitted hash defaults to quick");
+
+    // Oracle values from PPSSPP's StableQuickTexHash on bytes i*37+11.
+    // Includes its short-input path and one/multiple 64-byte rounds.
+    psprecomp::GuestMemory memory;
+    constexpr std::uint32_t address = 0x08800000u;
+    for (unsigned i = 0; i < 256u; ++i) memory.store8(address + i, static_cast<std::uint8_t>(i * 37u + 11u));
+    TextureState texture{};
+    texture.address = address;
+    texture.format = TextureFormat::Rgba5650;
+    texture.width = texture.buffer_width = 8;
+    TexturePackOptions options;
+    options.hash = TexturePackHash::Quick;
+    options.reduce_hash = options.ignore_address = true; // Not valid for quick.
+    TexturePackKey key;
+    std::uint32_t width, height;
+    const std::uint32_t hashes[] = {0x212ba000u, 0x2ed4e120u, 0x9543e480u, 0x6d186a8cu, 0xe9abe4bcu};
+    for (unsigned i = 0; i < std::size(hashes); ++i) {
+        texture.height = 1u << i;
+        check(compute_texture_pack_key(memory, texture, 0, options, key, width, height) &&
+                  key.data_hash == hashes[i] && key.cache_key >> 32u == address,
+              "quick hash oracle " + std::to_string(16u << i) + " bytes");
+    }
+    texture.height = 4;
+    texture.buffer_width = 16;
+    check(compute_texture_pack_key(memory, texture, 0, options, key, width, height) && key.data_hash == 0x6d21ae00u,
+          "quick hashes pitched rows separately");
+    const auto pack_dir = root / "quick-lookup";
+    make_pack(pack_dir, "[options]\nhash=quick\nreduceHash=true\nignoreAddress=true\n[hashes]\n" +
+                            format_texture_pack_key(key) + "=ui/capcom.png\n");
+    std::string error;
+    auto pack = TexturePack::open(pack_dir, kGame, error);
+    check(pack && !pack->options().reduce_hash && !pack->options().ignore_address,
+          "quick import disables incompatible options");
+    const auto replacement = pack ? pack->find(memory, texture, 0) : nullptr;
+    check(replacement && replacement->name == "ui/capcom.png", "quick runtime lookup selects the mapped image");
+    write(root / "legacy" / (format_texture_pack_key(key) + ".png"), "image");
+    pack = TexturePack::open(root / "legacy", kGame, error);
+    check(pack && pack->options().hash == TexturePackHash::Quick && pack->find(memory, texture, 0),
+          "hash-named images without an ini use quick");
 }
 
 bool wait(TexturePackCopy &copy) {
@@ -276,7 +315,7 @@ int check_folder(const char *folder) {
     std::printf("pack     %s\n", c.found() ? c.folder.string().c_str() : "(none)");
     std::printf("layout   %s\n", c.layout.c_str());
     if (!c.made_for.empty()) std::printf("made for %s\n", c.made_for.c_str());
-    std::printf("hash     %s%s\n", c.hash == TexturePackHash::Xxh64 ? "xxh64" : "xxh32",
+    std::printf("hash     %s%s\n", texture_pack_hash_name(c.hash),
                 c.ignore_address ? ", ignoreAddress" : "");
     std::printf("keys     %zu\n", c.keys);
     std::printf("images   %zu\n", c.images);

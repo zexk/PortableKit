@@ -86,7 +86,11 @@ struct TexturePackKey {
 // "0000000022585cbda625131a"
 [[nodiscard]] std::string format_texture_pack_key(const TexturePackKey &key);
 
-enum class TexturePackHash : std::uint8_t { Xxh32, Xxh64 };
+enum class TexturePackHash : std::uint8_t { Xxh32, Xxh64, Quick };
+
+constexpr const char *texture_pack_hash_name(TexturePackHash hash) {
+    return hash == TexturePackHash::Quick ? "quick" : hash == TexturePackHash::Xxh32 ? "xxh32" : "xxh64";
+}
 
 // What [options] says, plus the parts of the other sections that change a
 // texture's key.
